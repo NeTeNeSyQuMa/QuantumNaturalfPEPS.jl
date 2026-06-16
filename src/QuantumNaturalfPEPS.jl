@@ -11,6 +11,7 @@ using MPI
 
 using LinearAlgebra
 using ITensors
+using ITensorMPS
 
 using QuantumNaturalGradient: TensorOperatorSum, Parameters
 using QuantumNaturalGradient

@@ -293,7 +293,7 @@ sitedims(peps::AbstractPEPS) = [dim(siteind(peps, i, j)) for i in 1:size(peps, 1
 sitedims(peps::AbstractPEPS, i, j) = dim(siteind(peps, i, j))
 sitedim(peps::AbstractPEPS) = sitedims(peps, 1, 1)
 
-ITensors.linkinds(peps::AbstractPEPS, i, j) = filter!(!=(siteind(peps, i, j)), collect(inds(peps[i ,j])))
+ITensorMPS.linkinds(peps::AbstractPEPS, i, j) = filter!(!=(siteind(peps, i, j)), collect(inds(peps[i ,j])))
 
 ITensors.siteinds(peps::AbstractPEPS) = [siteind(peps, i, j) for i in 1:size(peps, 1), j in 1:size(peps, 2)]
 
