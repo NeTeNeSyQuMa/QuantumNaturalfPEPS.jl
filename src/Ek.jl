@@ -248,6 +248,7 @@ end
 # computes the local energy <sample|H|ψ>/<sample|ψ>
 function get_logψ_flipped(peps::AbstractPEPS, Ek_terms, env_top::Vector{Environment}, env_down::Vector{Environment},
                           sample::Matrix{Int64}, logψ::Number;
+                          trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
                           h_envs_r=nothing, h_envs_l=nothing, fourb_envs_r=nothing, fourb_envs_l=nothing, logψ_flipped=nothing,
                           timer=TimerOutput())
     
@@ -271,6 +272,13 @@ function get_logψ_flipped(peps::AbstractPEPS, Ek_terms, env_top::Vector{Environ
         end
         if !haskey(logψ_flipped, flip_term)
             logψ_flipped[flip_term] = get_term(peps, env_top, env_down, sample, flip_term, h_envs_r[flip_term[1][1][1], :], h_envs_l[flip_term[1][1][1], :])
+
+            sample_flipped = copy(sample)
+            for ((x, y), Sij) in flip_term
+                sample_flipped[x, y] = Sij
+            end
+
+            logψ_flipped[flip_term] += log(get_amplitude(trial_state, collect(vec(sample_flipped))))
         end
     end
     
@@ -284,6 +292,12 @@ function get_logψ_flipped(peps::AbstractPEPS, Ek_terms, env_top::Vector{Environ
                 row_values = map(t -> t[1][1], flip_term)
                 upperrow = minimum(row_values)
                 logψ_flipped[flip_term] = get_4body_term(peps, env_top, env_down, sample, flip_term, fourb_envs_r[upperrow, :], fourb_envs_l[upperrow, :])
+
+                sample_flipped = copy(sample)
+                for ((x, y), Sij) in flip_term
+                    sample_flipped[x, y] = Sij
+                end
+                logψ_flipped[flip_term] += log(get_amplitude(trial_state, collect(vec(sample_flipped))))
             end
         end
     end
@@ -295,6 +309,12 @@ function get_logψ_flipped(peps::AbstractPEPS, Ek_terms, env_top::Vector{Environ
         for flip_term in longerHor 
             if !haskey(logψ_flipped, flip_term)
                 logψ_flipped[flip_term] = get_longerHor_term(peps, env_top, env_down, sample, flip_term, h_envs_r[flip_term[1][1][1], :], h_envs_l[flip_term[1][1][1], :])
+                
+                sample_flipped = copy(sample)
+                for ((x, y), Sij) in flip_term
+                    sample_flipped[x, y] = Sij
+                end
+                logψ_flipped[flip_term] += log(get_amplitude(trial_state, collect(vec(sample_flipped))))
             end
         end
     end
@@ -309,6 +329,7 @@ function get_logψ_flipped(peps::AbstractPEPS, Ek_terms, env_top::Vector{Environ
                     sample_flipped[x,y] = Sij
                 end
                 logψ_flipped[flip_term] = logψ_exact(peps, sample_flipped)
+                logψ_flipped[flip_term] += log(get_amplitude(trial_state, collect(vec(sample_flipped))))
             end
         end
     end
@@ -329,11 +350,11 @@ function get_Ek(peps::AbstractPEPS, ham_op::TensorOperatorSum, sample; env_top=A
 end
 
 
-function get_Ek(peps::AbstractPEPS, ham_op::TensorOperatorSum, env_top::Vector{Environment}, env_down::Vector{Environment}, sample::Matrix{Int64}, logψ::Number; h_envs_r=nothing, h_envs_l=nothing, fourb_envs_r=nothing, fourb_envs_l=nothing, logψ_flipped=nothing, Ek_terms=nothing, kwargs...)
+function get_Ek(peps::AbstractPEPS, ham_op::TensorOperatorSum, env_top::Vector{Environment}, env_down::Vector{Environment}, sample::Matrix{Int64}, logψ::Number; trial_state=IdentityState(dim(siteinds(peps)[1])), h_envs_r=nothing, h_envs_l=nothing, fourb_envs_r=nothing, fourb_envs_l=nothing, logψ_flipped=nothing, Ek_terms=nothing, kwargs...)
     if Ek_terms === nothing
         Ek_terms = QuantumNaturalGradient.get_precomp_sOψ_elems(ham_op, sample; get_flip_sites=true)
     end
-    logψ_flipped = get_logψ_flipped(peps, Ek_terms, env_top, env_down, sample, logψ; h_envs_r, h_envs_l, fourb_envs_r, fourb_envs_l, logψ_flipped, kwargs...)
+    logψ_flipped = get_logψ_flipped(peps, Ek_terms, env_top, env_down, sample, logψ; trial_state, h_envs_r, h_envs_l, fourb_envs_r, fourb_envs_l, logψ_flipped, kwargs...)
     
     Ek = 0
     for flip_term in keys(Ek_terms)

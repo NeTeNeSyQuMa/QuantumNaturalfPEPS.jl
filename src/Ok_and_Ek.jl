@@ -1,10 +1,11 @@
 
 # Calculates the Energy and Gradient of a given peps and hamiltonian
-function Ok_and_Ek(peps::AbstractPEPS, ham_op; timer=TimerOutput(), Ok=nothing, sampling_mode=:full,
+function Ok_and_Ek(peps::AbstractPEPS, ham_op; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), 
+                   timer=TimerOutput(), Ok=nothing, sampling_mode=:full,
                    resample=false, correct_sampling_error=true, resample_energy=0, # TODO: remove
                    )
     
-    S, logpc, env_top = @timeit timer "sampling" get_sample(peps; mode=sampling_mode, timer) # draw a sample
+    S, logpc, env_top = @timeit timer "sampling" get_sample(peps; trial_state=trial_state, mode=sampling_mode, timer) # draw a sample
     
     if resample
         S = QuantumNaturalGradient.resample_with_H(S, ham_op; resample_energy)
@@ -16,10 +17,13 @@ function Ok_and_Ek(peps::AbstractPEPS, ham_op; timer=TimerOutput(), Ok=nothing, 
     h_envs_r, h_envs_l = @timeit timer "horizontal_envs" get_all_horizontal_envs(peps, env_top, env_down, S) # computes the horizontal environments of the already sampled peps
     
     # initialize the flipped logψ dictionary, will be used to compute other observables or for the resampling
-    logψ_flipped = Dict{Any, Number}() 
+    logψ_flipped = Dict{Any, Number}()
     Ek_terms = @timeit timer "precomp_sHψ_elems"  QuantumNaturalGradient.get_precomp_sOψ_elems(ham_op, S; get_flip_sites=true)
-    E_loc = @timeit timer "energy" get_Ek(peps, ham_op, env_top, env_down, S, logψ; h_envs_r, h_envs_l, logψ_flipped, Ek_terms, timer) # compute the local energy
-    grad = @timeit timer "log_gradients" get_Ok(peps, env_top, env_down, S, logψ; h_envs_r, h_envs_l, Ok) # compute the gradient
+    grad = @timeit timer "log_gradients" get_Ok(peps, env_top, env_down, S, logψ; trial_state=trial_state, h_envs_r, h_envs_l, Ok) # compute the gradient
+
+    # add logψ from trial state such that we get the correct logψ_combined
+    logψ += log(get_amplitude(trial_state, collect(vec(S))))
+    E_loc = @timeit timer "energy" get_Ek(peps, ham_op, env_top, env_down, S, logψ; trial_state=trial_state, h_envs_r, h_envs_l, logψ_flipped, Ek_terms, timer) # compute the local energy
 
     if resample # adjust logpc, this will introduce errors as this is only an approximation of the true logpc
         @assert !correct_sampling_error "Correcting the sampling error with resampling is not implemented"
@@ -32,8 +36,6 @@ function Ok_and_Ek(peps::AbstractPEPS, ham_op; timer=TimerOutput(), Ok=nothing, 
 
     return grad, E_loc, logψ, S, logpc, max_bond
 end
-
-
 
 """
 Calculates logψ and the environments of a given peps and sample

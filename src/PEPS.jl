@@ -88,11 +88,11 @@ function set_params!(peps::AbstractPEPS, tensors)
 end
 
 Base.convert(::Type{Vector}, peps::AbstractPEPS; kwargs...) = vec(peps; kwargs...)
-function Base.vec(peps::AbstractPEPS; mask=peps.mask) # Flattens the tensors into a vector
+function Base.vec(peps::AbstractPEPS; mask=peps.mask) # Flattens the tensors into a vector (using Column major ordering) NOTE: Why was it even row major before? Everything else is column major...
     type = eltype(peps)
     θ = Vector{type}(undef, length(peps; mask))
     pos = 1
-    for i in 1:size(peps, 1), j in 1:size(peps, 2)
+    for j in 1:size(peps, 1), i in 1:size(peps, 2)
         if mask[i,j] != 0
             shift = prod(dim.(inds(peps[i,j])))
             x = @view θ[pos:pos+shift-1]
@@ -115,10 +115,11 @@ function Base.length(peps::AbstractPEPS; mask=peps.mask)
     return x
 end
 
+# column major version of write!
 function write!(peps::AbstractPEPS, θ::Vector{T}; reset_double_layer=true, mask=peps.mask) where T# Writes the vector θ into the tensors.
     @assert eltype(peps) == T "The type of the PEPS is $(eltype(peps)) and the type of the vector θ is $T. They must be the same type."
     pos = 1
-    for i in 1:size(peps, 1), j in 1:size(peps, 2)
+    for j in 1:size(peps, 2), i in 1:size(peps, 1)
         if mask[i,j] != 0
             shift = prod(dim.(inds(peps[i,j])))
             θi = @view θ[pos:(pos+shift-1)]
@@ -363,9 +364,13 @@ function write_Tensor!(peps, tensor, i, j)
     else
         tensor = ITensor(tensor, indices)
     end
-    perm = NDTensors.getperm(inds(peps[i,j]), indices)
-    # TODO: Why do you permute the tensors here?
-    peps[i,j] = ITensor(permutedims(tensor.tensor, perm))
+    if _is_fermionic_indices(indices)
+        peps[i,j] = permute(tensor, inds(peps[i,j]))
+    else
+        perm = NDTensors.getperm(inds(peps[i,j]), indices)
+        # TODO: Why do you permute the tensors here?
+        peps[i,j] = ITensor(permutedims(tensor.tensor, perm))
+    end
 end
 
 # Writes Array of Tensors into fPEPS with a pattern e.g.

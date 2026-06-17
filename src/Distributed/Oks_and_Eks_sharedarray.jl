@@ -1,4 +1,5 @@
 function generate_Oks_and_Eks_multiproc_sharedarrays(peps::AbstractPEPS, ham_op::TensorOperatorSum; 
+                                                     trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
                                                      timer=TimerOutput(), threaded=true, double_layer_update=update_double_layer_envs!,
                                                      reset_double_layer=true,
                                                      kwargs...)
@@ -7,14 +8,16 @@ function generate_Oks_and_Eks_multiproc_sharedarrays(peps::AbstractPEPS, ham_op:
         if length(kwargs2) > 0
             kwargs = merge(kwargs, kwargs2)
         end
-        write!(peps, Θ; reset_double_layer)
+        # write!(peps, Θ; reset_double_layer)
+        write!(peps, Θ[1:(length(Θ)-length(Parameters(trial_state)))]; reset_double_layer)
+        write!(trial_state, Θ[(length(Θ)-length(Parameters(trial_state))+1):end])
 
         if reset_double_layer
             @timeit timer "double_layer_envs" double_layer_update(peps) # update the double layer environments once for the peps
         end
 
         return @timeit timer "Oks_and_Eks" Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr;
-                                                               timer=timer, n_threads=n_threads, kwargs...)
+                                                               trial_state=trial_state, timer=timer, n_threads=n_threads, kwargs...)
     end
 
     function Oks_and_Eks_(peps_::Parameters{<:AbstractPEPS}, sample_nr::Integer; kwargs2...)
@@ -28,12 +31,12 @@ function generate_Oks_and_Eks_multiproc_sharedarrays(peps::AbstractPEPS, ham_op:
             kwargs = merge(kwargs, kwargs2)
         end
         return @timeit timer "Oks_and_Eks" Oks_and_Eks_multiproc_sharedarrays(peps_, ham_op, sample_nr;
-                                                               timer=timer, n_threads=n_threads, kwargs...)
+                                                               trial_state=trial_state, timer=timer, n_threads=n_threads, kwargs...)
     end
     return Oks_and_Eks_
 end
 
-function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; Oks=nothing, importance_weights=true, 
+function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; trial_state = trial_state, Oks=nothing, importance_weights=true, 
                                n_threads=Distributed.remotecall_fetch(()->Threads.nthreads(), workers()[1]),
                                timer=TimerOutput(),
                                kwargs...)
@@ -52,7 +55,7 @@ function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; Oks=nothing
     @assert Oks === nothing || Oks isa SharedArray
 
     if Oks === nothing
-        Oks = SharedArray{eltype_}( (nr_parameters, sample_nr_eff), pids=workers())
+        Oks = SharedArray{eltype_}( (nr_parameters + length(Parameters(trial_state)), sample_nr_eff), pids=workers())
     end
 
     # TODO: Send ham_op only once through the network
@@ -63,7 +66,7 @@ function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; Oks=nothing
         Oks_ = @view Oks[:, i1:i2]
         task = Distributed.remotecall(
             () -> Oks_and_Eks_threaded(peps, ham_op, k;
-                                        importance_weights=false, seed=seed + w,
+                                        trial_state=trial_state, importance_weights=false, seed=seed + w,
                                         nr_threads=n_threads, Oks=Oks_, return_Oks=false, kwargs...),
             w)
         push!(out, task)
