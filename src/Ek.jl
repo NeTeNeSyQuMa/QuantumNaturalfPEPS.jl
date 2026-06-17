@@ -24,7 +24,7 @@ function sort_dict(Ek_terms; vertical=true)
             elseif maximum(xs)-minimum(xs) == 0 && maximum(ys)-minimum(ys) <= 1
                 insert(hor, flip_term)
             elseif maximum(xs)-minimum(xs) <= 1 && maximum(ys)-minimum(ys) == 0 && vertical
-                insert(vetr, flip_term)
+                insert(vert, flip_term)
             elseif maximum(xs)-minimum(xs) <= 1 && maximum(ys)-minimum(ys) <=1
                 insert(four, flip_term)
             elseif maximum(xs)-minimum(xs) == 0
