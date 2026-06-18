@@ -45,8 +45,22 @@ jobs:
       - name: Cache Julia dependencies
         uses: julia-actions/cache@v2
 
-      - name: Instantiate project
-        run: julia --project=. -e "using Pkg; Pkg.instantiate()"
+      # TODO: Register Parallel Gradient and QuantumNaturalGradient. The rm() command is only necessary because the develop() command doesn't overwrite existing entries in the manifest, so if we register the packages, we can remove the rm() command and just use Pkg.add() to install the dependencies.
+      - name: Set up project
+        run: |
+          julia --project=. -e '
+            using Pkg
+            
+            Pkg.rm("ParallelGradient")
+            Pkg.rm("QuantumNaturalGradient")
+
+            Pkg.develop([
+              PackageSpec(url="https://github.com/NeTeNeSyQuMa/ParallelGradient.jl"),
+              PackageSpec(url="https://github.com/NeTeNeSyQuMa/QuantumNaturalGradient.jl")
+            ])
+
+            Pkg.instantiate()
+          '
 
       - name: Run tests
         run: julia --project=. src/Tests/runtests.jl
