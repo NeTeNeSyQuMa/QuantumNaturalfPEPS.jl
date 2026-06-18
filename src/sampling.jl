@@ -77,6 +77,16 @@ function calculate_unsampled_Env_row(ket, bra, peps, i, sites)
 end
 
 # returns the phys_dimxphys_sim matrix ρ_r which is needed to sample from. Also updates sigma (used to store the contraction of already sampled sites from the left edge to the current site)
+
+#= 
+LR:
+
+This function computes the local reduced density matrix for a strictly single site (i,j) out of a 2D PEPS. 
+It assumes that all spins to the "left" of column j in the current row i have already been sampled, 
+and all spins in the rows completely above row i have also been sampled.
+
+E: An array of "right environments". It contains the contraction of all the columns strictly to the right of j (pre-computed bounding boxes).
+=#
 function get_reduced_ρ(ket_j, bra_j, peps, i, j, E, sigma)
    
     if i != size(peps, 1)
@@ -95,8 +105,20 @@ function get_reduced_ρ(ket_j, bra_j, peps, i, j, E, sigma)
     return ρ_r, sigma
 end
 
+row_major_site(i::Int, j::Int, Ly::Int) = (i - 1) * Ly + j
+col_major_site(i::Int, j::Int, Lx::Int) = i + (j - 1) * Lx
+
 # samples from ρ_r and updates pc
-function sample_ρr(ρ_r)
+function sample_ρr(ρ_r, S, r, c; trial_state::AbstractTrialState=IdentityState(size(ρ_r, 1)))
+    occ_dict = Dict{Int, Int}()
+    for i in 1:size(S,1), j in 1:size(S,2)
+        if i < r || (i == r && j < c)
+            # use linear indexing (assume square lattice here)
+            occ_dict[col_major_site(i, j, size(S,1))] = S[i,j] # -> use Column Major Order here to be consistent with the PEPS site ordering and the sampling order in get_sample()
+        end
+    end
+
+    # prepare prob vector for PEPS
     k = size(ρ_r, 1) 
     T = real(eltype(ρ_r))
     p = Vector{T}(undef, k)
@@ -104,8 +126,19 @@ function sample_ρr(ρ_r)
         p[i] = abs(ρ_r[i, i])
         @assert imag(ρ_r[i, i]) / (p[i] + 1e-10) < 1e-8 "ρ_r is not real $(ρ_r[i, i])"
     end
-    i = sample_p(p, normalize=true)
-    return i-1, p[i]
+
+    # prepare prob vector for trial state
+    current_site_key = col_major_site(r, c, size(S,1)) # use column major ordering here
+    p_trial = Vector{T}(undef, k)
+    for i in 1:k
+        occ_dict[current_site_key] = i-1
+        p_trial[i] = get_prob(trial_state, occ_dict) # joint probability
+    end
+    
+    p_final = p .* p_trial
+
+    i = sample_p(p_final, normalize=true)
+    return i-1, p_final[i]
 end
 
 function sample_p(probs::Vector{T}; normalize=true) where T<:Real
@@ -124,15 +157,19 @@ function sample_p(probs::Vector{T}; normalize=true) where T<:Real
 end
 
 # generates a sample of a given peps along with pc and the top environments
-function get_sample(peps::AbstractPEPS; mode::Symbol=:full, alg="densitymatrix", timer=TimerOutput())
-    S = Array{Int64}(undef, size(peps))
+#= 
+    The sample has column-major ordering: S = [s1 s3; s2 s4] 
+    vec(S) = [s1, s2, s3, s4] where s1 is the occupation of site (1,1), s2 of site (2,1), s3 of site (1,2) and s4 of site (2,2)
+=#
+function get_sample(peps::AbstractPEPS; mode::Symbol=:full, alg="densitymatrix", timer=TimerOutput(), trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1,1])))
+    S = Array{Int64}(undef, size(peps)) # uses row major ordering
     
     env_top = Array{Environment}(undef, size(peps, 1)-1)
     sites = siteinds(peps)
     ρ_r = ITensor()
     
     logpc = 0
-    # we loop through every row
+    # we loop through every row (This uses row-major ordering)
     for i in 1:size(peps, 1)
         sigma = 1
         ket = @timeit timer "env_sample" get_ket(peps, i, env_top)
@@ -148,7 +185,7 @@ function get_sample(peps::AbstractPEPS; mode::Symbol=:full, alg="densitymatrix",
             ρ_r, sigma = get_reduced_ρ(ket[j], bra[j], peps, i, j, E, sigma)
             
             # sample from ρ_r
-            S[i, j], pc = sample_ρr(ρ_r)
+            S[i, j], pc = sample_ρr(ρ_r, S, i, j; trial_state=trial_state)
             logpc += log(pc)
             
             # after the sampling of the current site, it is fixed and its contraction with the aleady sampled sites is stored in sigma

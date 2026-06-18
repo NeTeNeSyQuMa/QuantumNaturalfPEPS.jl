@@ -16,6 +16,12 @@ using ITensorMPS
 using QuantumNaturalGradient: TensorOperatorSum, Parameters
 using QuantumNaturalGradient
 
+using MatrixFactorizations
+using SkewLinearAlgebra
+using Zygote
+
+include("TrialStates/TrialStates.jl")
+
 include("misc.jl")
 include("tensor_ops.jl")
 include("mps_ops.jl")
@@ -32,7 +38,7 @@ include("Hamiltonians.jl")
 include("Operations/Operations.jl")
 include("Properties/Properties.jl")
 include("Distributed/Distributed.jl")
-include("Test.jl")
+# include("Test.jl")
 
 
 export PEPS
