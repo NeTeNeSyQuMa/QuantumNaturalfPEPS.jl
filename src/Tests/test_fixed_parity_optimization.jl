@@ -22,7 +22,7 @@ function build_history_callback()
     η_history = Vector{Vector{Float64}}()
 
     callback = function (; state, misc, niter)
-        @show state.θ
+        # @show state.θ
         push!(η_history, copy(Float64.(state.θ)))
         return true
     end
@@ -47,21 +47,21 @@ H_BdG = build_H_BdG_mat(η_exact, N)
 # get exact ground state energy for comparison
 eigenvalues = eigvals(H_BdG)
 E_exact = real(sum(eigenvalues[1:N]) / 2 + sum(diag(H_BdG[1:N, 1:N])) / 2)
-@show E_exact
+# @show E_exact
 
 # get energy of first excited state
 E_excited = E_exact + minimum(abs.(eigenvalues))
-@show E_excited
+# @show E_excited
 
 # determine parity of ground state
 GS = QuantumNaturalfPEPS.GaussianState(build_H_BdG_mat, N; η=η_exact)
 
 parity_sector = begin
     if GS.occ_ref == zeros(Int, N)
-        println("Ground state parity: " * (QuantumNaturalfPEPS.getParity(GS) == 0 ? "Even" : "Odd"))
+        # println("Ground state parity: " * (QuantumNaturalfPEPS.getParity(GS) == 0 ? "Even" : "Odd"))
         QuantumNaturalfPEPS.getParity(GS)
     else # if the reference state is not the quasiparticle vacuum, the quasiparticle vacuum has flipped parity compared to the state we construct
-        println("Ground state parity: " * (QuantumNaturalfPEPS.getParity(GS) == 0 ? "Odd" : "Even"))
+        # println("Ground state parity: " * (QuantumNaturalfPEPS.getParity(GS) == 0 ? "Odd" : "Even"))
         1 - QuantumNaturalfPEPS.getParity(GS)
     end
 end
@@ -80,7 +80,7 @@ end
     # Evolve for a fixed (small) number of iterations as a demo
     @time loss_value, trained_η, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, η_init; 
             integrator, 
-            verbosity=2,
+            verbosity=0,
             callback,
             solver,
             sample_nr=Nsamples,
@@ -94,12 +94,12 @@ end
         parity_hist[i] = QuantumNaturalfPEPS.getParity(QuantumNaturalfPEPS.GaussianState(build_H_BdG_mat, N; η=η, parity_sector=parity_sector, target_state=0))
     end
 
-    @show η0
-    @show η_exact
-    @show trained_η ./ trained_η[1]
-    @show loss_value
-    @show E_exact
-    @show E_excited
+    # @show η0
+    # @show η_exact
+    # @show trained_η ./ trained_η[1]
+    # @show loss_value
+    # @show E_exact
+    # @show E_excited
 
     @test isapprox(trained_η ./ trained_η[1], η_exact ./ η_exact[1]; atol=tol)
     @test isapprox(loss_value, E_exact; atol=tol)
@@ -122,7 +122,7 @@ end
     # Evolve for a fixed (small) number of iterations as a demo
     @time loss_value, trained_η, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, η_init; 
             integrator, 
-            verbosity=2,
+            verbosity=0,
             callback,
             solver,
             sample_nr=Nsamples,
@@ -136,11 +136,11 @@ end
         parity_hist[i] = QuantumNaturalfPEPS.getParity(QuantumNaturalfPEPS.GaussianState(build_H_BdG_mat, N; η=η, parity_sector=parity_sector_1st_excited, target_state=0))
     end
 
-    @show η_exact
-    @show trained_η ./ trained_η[1]
-    @show loss_value
-    @show E_exact
-    @show E_excited
+    # @show η_exact
+    # @show trained_η ./ trained_η[1]
+    # @show loss_value
+    # @show E_exact
+    # @show E_excited
 
     @test isapprox(trained_η ./ trained_η[1], η_exact ./ η_exact[1]; atol=tol)
     @test isapprox(loss_value, E_excited; atol=tol)
