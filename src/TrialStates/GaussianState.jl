@@ -389,8 +389,8 @@ This is used for sequential sampling, where one measures sites one by one and co
 """
 function build_occ_projector_matrix!(M_j::AbstractMatrix, occ_string::AbstractVector{Int}, n_measured::Int)
     fill!(M_j, 0)
-    @inbounds for site in 1:n_measured
-        set_occ_projector_block!(M_j, site, occ_string[site])
+    @inbounds for site_colmajor in 1:n_measured
+        set_occ_projector_block!(M_j, site_colmajor, occ_string[site_colmajor])
     end
     return M_j
 end
