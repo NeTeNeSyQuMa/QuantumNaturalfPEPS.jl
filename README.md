@@ -9,6 +9,7 @@
 
 ```julia
 using ITensors
+using ITensorMPS
 using QuantumNaturalGradient
 using QuantumNaturalfPEPS
 
