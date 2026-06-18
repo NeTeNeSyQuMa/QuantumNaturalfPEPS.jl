@@ -105,13 +105,16 @@ function get_reduced_ρ(ket_j, bra_j, peps, i, j, E, sigma)
     return ρ_r, sigma
 end
 
+row_major_site(i::Int, j::Int, Ly::Int) = (i - 1) * Ly + j
+col_major_site(i::Int, j::Int, Lx::Int) = i + (j - 1) * Lx
+
 # samples from ρ_r and updates pc
 function sample_ρr(ρ_r, S, r, c; trial_state::AbstractTrialState=IdentityState(size(ρ_r, 1)))
     occ_dict = Dict{Int, Int}()
     for i in 1:size(S,1), j in 1:size(S,2)
         if i < r || (i == r && j < c)
             # use linear indexing (assume square lattice here)
-            occ_dict[(j-1)*size(S,1) + i] = S[i,j] # -> use Column Major Order here to be consistent with the PEPS site ordering and the sampling order in get_sample()
+            occ_dict[col_major_site(i, j, size(S,1))] = S[i,j] # -> use Column Major Order here to be consistent with the PEPS site ordering and the sampling order in get_sample()
         end
     end
 
@@ -125,7 +128,7 @@ function sample_ρr(ρ_r, S, r, c; trial_state::AbstractTrialState=IdentityState
     end
 
     # prepare prob vector for trial state
-    current_site_key = (c-1)*size(S,1) + r # use column major ordering here
+    current_site_key = col_major_site(r, c, size(S,1)) # use column major ordering here
     p_trial = Vector{T}(undef, k)
     for i in 1:k
         occ_dict[current_site_key] = i-1

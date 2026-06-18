@@ -246,117 +246,9 @@ function build_H_BdG_derivatives(H_BdG_func::Function, η::AbstractVector{<:Numb
     
     return dHs
 end
-# function build_H_BdG_derivatives(H_BdG_func::Function, η::AbstractVector{<:Number}, N::Int)
-#     dimH = 2 * N
-#     n_entries = dimH * dimH
-    
-#     T = eltype(H_BdG_func(η, N))
-
-#     dHs = Vector{Matrix{T}}(undef, length(η))
-#     if T <: AbstractFloat
-#         f = θ -> vec(Matrix(H_BdG_func(θ, N)))
-#         J = Zygote.jacobian(f, η)[1]  # (2*dimH^2) x length(η)
-
-#         for a in eachindex(η)
-#             dH_real = reshape(@view(J[1:n_entries, a]), dimH, dimH)
-#             dHs[a] = dH_real
-#         end
-#     # Zygote.jacobian expects real outputs, so encode complex H as [real(vec(H)); imag(vec(H))].
-#     # elseif T <: Complex
-#     #     # f = θ -> begin
-#     #     #     H_vec = vec(ComplexF64.(Matrix(H_BdG_func(θ, N))))
-#     #     #     vcat(real.(H_vec), imag.(H_vec))
-#     #     # end
-#     #     # J = Zygote.jacobian(f, η)[1]  # (2*dimH^2) x length(η)
-
-#     #     # for a in eachindex(η)
-#     #     #     dH_real = reshape(@view(J[1:n_entries, a]), dimH, dimH)
-#     #     #     dH_imag = reshape(@view(J[n_entries + 1:2n_entries, a]), dimH, dimH)
-
-#     #     #     @show dH_real[1,2]
-#     #     #     @show dH_imag[1,2]
-
-#     #     #     dHs[a] = Hermitian(dH_real .+ im .* dH_imag)
-#     #     # end
-#     #     n = length(η)
-
-#     #     # real parameter vector
-#     #     θ0 = vcat(real.(η), imag.(η))
-
-#     #     # real-valued function of real parameters
-#     #     f = θ -> begin
-#     #         # ηc = @view θ[1:n] .+ im .* @view θ[n+1:2n]
-#     #         ηc = θ[1:n] .+ im .* θ[n+1:2n]
-#     #         H = Matrix(H_BdG_func(ηc, N))
-#     #         H_vec = vec(ComplexF64.(H))
-#     #         vcat(real.(H_vec), imag.(H_vec))
-#     #     end
-
-#     #     J = Zygote.jacobian(f, θ0)[1]  # (2*dimH^2) x (2n)
-
-#     #     for a in eachindex(η)
-#     #         # dH_real = reshape(@view(J[1:n_entries, a]), dimH, dimH)
-#     #         # dH_imag = reshape(@view(J[n_entries + 1:2n_entries, a]), dimH, dimH)
-
-#     #         # @show dH_real[1,2]
-#     #         # @show dH_imag[1,2]
-
-#     #         # # Wirtinger derivative dH/dη*
-#     #         # dH = 0.5 .* (dH_real .+ im .* dH_imag)
-
-#     #         dH_dx = reshape(@view(J[1:n_entries, a]), dimH, dimH)
-#     #         dH_dy = reshape(@view(J[1:n_entries, a + n]), dimH, dimH)
-
-#     #         dH_dx_im = reshape(@view(J[n_entries + 1:2n_entries, a]), dimH, dimH)
-#     #         dH_dy_im = reshape(@view(J[n_entries + 1:2n_entries, a + n]), dimH, dimH)
-
-#     #         dH_dx_full = dH_dx .+ im .* dH_dx_im
-#     #         dH_dy_full = dH_dy .+ im .* dH_dy_im
-
-#     #         dH = 0.5 .* (dH_dx_full .+ im .* dH_dy_full)  # dH/dη*
-
-#     #         dHs[a] = dH
-#     #     end
-#     # end
-#         elseif T <: Complex
-#         η_reim = vcat(real.(η), imag.(η))
-
-#         function f_reim(x)
-#             n = length(x) ÷ 2
-#             θ = ComplexF64.(x[1:n] .+ im .* x[n+1:end])
-
-#             H_vec = vec(Matrix(H_BdG_func(θ, N)))
-
-#             return vcat(real.(H_vec), imag.(H_vec))
-#         end
-
-#         J = Zygote.jacobian(f_reim, η_reim)[1]
-
-#         nη = length(η)
-
-#         for a in 1:nη
-#             # derivative wrt Re η_a
-#             dH_re = reshape(@view(J[1:n_entries, a]), dimH, dimH) .+
-#                     im .* reshape(@view(J[n_entries+1:2n_entries, a]), dimH, dimH)
-
-#             # derivative wrt Im η_a
-#             dH_im = reshape(@view(J[1:n_entries, nη+a]), dimH, dimH) .+
-#                     im .* reshape(@view(J[n_entries+1:2n_entries, nη+a]), dimH, dimH)
-
-#             # reconstruct complex derivative:
-#             # dHs[a] = Hermitian(0.5 .* (dH_re .- im .* dH_im))
-#             dH = dH_re .+ im .* dH_im
-#             dH = 0.5 .* (dH + dH')
-#             dHs[a] = Hermitian(dH)
-#         end
-#     end
-    
-#     return dHs
-# end
 function build_H_BdG_derivatives(GS::GaussianState)
     return build_H_BdG_derivatives(GS.H_BdG_func, GS.η, GS.N)
 end
-
 
 """
     to_occ_dict(occ_string::Vector{Int})
@@ -479,9 +371,9 @@ where `γ_2j-1` and `γ_2j` are the Majorana operators corresponding to site `j`
 function build_occ_projector_matrix(occ_dict::Dict{Int, Int}, N::Int)
     M_j = zeros(Int8, 2N, 2N)
 
-    for (site, n_j) in occ_dict
+    for (site_colmajor, n_j) in occ_dict
         s_j = 1 - 2*n_j
-        row = 2*site - 1
+        row = 2*site_colmajor - 1
         M_j[row, row + 1] = s_j
         M_j[row + 1, row] = -s_j
     end
@@ -503,9 +395,9 @@ function build_occ_projector_matrix!(M_j::AbstractMatrix, occ_string::AbstractVe
     return M_j
 end
 
-function set_occ_projector_block!(M_j::AbstractMatrix, site::Int, n_j::Int)
+function set_occ_projector_block!(M_j::AbstractMatrix, site_colmajor::Int, n_j::Int)
     s_j = 1 - 2*n_j
-    row = 2*site - 1
+    row = 2*site_colmajor - 1
     M_j[row, row + 1] = s_j
     M_j[row + 1, row] = -s_j
     return M_j
