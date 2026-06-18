@@ -46,7 +46,7 @@ jobs:
         uses: julia-actions/cache@v2
 
       # TODO: Register Parallel Gradient and QuantumNaturalGradient. The rm() command is only necessary because the develop() command doesn't overwrite existing entries in the manifest, so if we register the packages, we can remove the rm() command and just use Pkg.add() to install the dependencies.
-      - name: Set up project
+      - name: Set up project and run tests
         run: |
           julia --project=. -e '
             using Pkg
@@ -60,7 +60,6 @@ jobs:
             ])
 
             Pkg.instantiate()
-          '
 
-      - name: Run tests
-        run: julia --project=. src/Tests/runtests.jl
+            Pkg.test()
+          '
