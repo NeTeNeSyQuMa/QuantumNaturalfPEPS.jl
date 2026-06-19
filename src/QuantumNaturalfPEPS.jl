@@ -32,8 +32,6 @@ include("Hamiltonians.jl")
 include("Operations/Operations.jl")
 include("Properties/Properties.jl")
 include("Distributed/Distributed.jl")
-include("Test.jl")
-
 
 export PEPS
 export write!
