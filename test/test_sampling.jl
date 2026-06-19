@@ -39,11 +39,10 @@ function _sample_ρr(ρ_r, S, r, c; trial_state::QuantumNaturalfPEPS.AbstractTri
     p_final = r_prob .* q_prob
 
     i = QuantumNaturalfPEPS.sample_p(p_final, normalize=true)
-
     return i-1, p_final[i], p_final, q_prob, r_prob
 end
 
-function build_H_BdG_mat(η, N)
+function _build_H_BdG_mat(η, N)
     t = η[1]
     Δ = η[2]
     μ = η[3]
@@ -66,7 +65,7 @@ end
     N = L*L
     # simple Tight-binding Hamiltonian as test
     η = [1.0, 0.0, 0.0]
-    GS = QuantumNaturalfPEPS.GaussianState(build_H_BdG_mat, N; η=η)
+    GS = QuantumNaturalfPEPS.GaussianState(_build_H_BdG_mat, N; η=η)
 
     # exact prob distribution from Gaussian state
     p_GS = zeros(Float64, 2^N)
