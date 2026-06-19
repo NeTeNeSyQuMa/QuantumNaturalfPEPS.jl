@@ -6,6 +6,20 @@ function compute_importance_weights(logψs, logpcs)
     return exp.(log_ratios .- logZ)
 end
 
+function weighted_mean_error(x, w) 
+    x = real.(x)
+    w = real.(w)
+
+    sumw = sum(w)
+    μ = sum(w .* x) / sumw
+
+    var = sum(w .* abs2.(x .- μ)) / sumw
+    neff = abs2(sumw) / sum(abs2, w)
+    err = sqrt(var / max(neff, 1e-12))
+
+    return μ, err, neff
+end
+
 function generate_Oks_and_Eks(peps::AbstractPEPS, ham::OpSum; kwargs...)
     hilbert = siteinds(peps)
     ham_op = TensorOperatorSum(ham, hilbert)
