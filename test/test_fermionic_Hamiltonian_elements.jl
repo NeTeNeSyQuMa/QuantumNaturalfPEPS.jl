@@ -165,40 +165,41 @@ using ITensors, ITensorMPS
 
             # Offset by 1 because ITensor state indices for Fermions are 1-based (1 and 2)
             sample_ = sample .+ offset
-            
+            row = sample_index(sample)
+
+            # 1) Process standard non-diagonal tensors
             for (tensor, sites) in zip(ham_op.tensors, ham_op.sites)
                 sample_r = sample_[sites]
                 hilbert_r = hilbert_flat[sites]
                 
-                indices_sample = collect(hi' => s for (hi, s) in zip(hilbert_r, sample_r)) # Selects the indices that act on the tensor from the left O|s>
-                tensor_proj = onehot(eltype(tensor), indices_sample) * tensor # <s'|T
+                indices_sample = collect(hi' => s for (hi, s) in zip(hilbert_r, sample_r))
+                tensor_proj = onehot(eltype(tensor), indices_sample) * tensor
 
-                # Make sure that the indices have the right permutation
                 perm = NDTensors.getperm(ITensors.inds(tensor_proj), hilbert_r)
                 tensor_proj = ITensor(permutedims(tensor_proj.tensor, perm))
 
                 inds = findall(x -> x != 0, tensor_proj.tensor)
                 for ind in inds
-                    if length(ind) == 1
-                        sample_r2 = ind
-                    else
-                        sample_r2 = ind.I
-                    end
+                    sample_r2 = length(ind) == 1 ? ind : ind.I
                     key = find_flip_site(sample_r .- offset, sample_r2 .- offset, sites)
                     col_sample = apply_flip_site(sample, key)
 
-                    # sign = isfermionic ? sign_from_s_to_sp(sample, col_sample) : 1
-                    # vi = sign * tensor_proj[ind]
                     vi = tensor_proj[ind]
-
-                    row = sample_index(sample)
                     col = sample_index(col_sample)
-
-                    # row = 1 + sum(sample[i] << (i-1) for i in 1:N)
-                    # col = 1 + sum(col_sample[i] << (i-1) for i in 1:N)
-
                     ham_mat_manybody[row, col] += vi
                 end
+            end
+
+            # 2) Process diagonal tensors
+            for (v, sites) in zip(ham_op.diag_tensors, ham_op.diag_sites)
+                # Since v is a flat diagonal representation, we index it using 
+                # the linear configuration index of the subsystem active sites
+                sub_sample = sample[sites]
+                # Convert binary configuration to a 1-based linear index
+                diag_idx = evalpoly(2, sub_sample) + 1
+                
+                # Diagonal elements map the state back to itself (row == col)
+                ham_mat_manybody[row, row] += v[diag_idx]
             end
         end
 
