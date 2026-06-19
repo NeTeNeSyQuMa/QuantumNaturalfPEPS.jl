@@ -16,12 +16,12 @@ function get_ExpectationValue(peps::AbstractPEPS, O;
     end
     if multiproc
         #get_ExpectationValues_singlethread(peps, [O_op[1]]; it=1)
-        return get_ExpectationValues_multiproc(peps, O_op; it)
+        return get_ExpectationValues_multiproc(peps, O_op; trial_state=trial_state, it=it)
     elseif threaded
         get_ExpectationValues_singlethread(peps, [O_op[1]]; it=1)
-        return get_ExpectationValues_multithread(peps, O_op; it)
+        return get_ExpectationValues_multithread(peps, O_op; trial_state=trial_state, it=it)
     else
-        return get_ExpectationValues_singlethread(peps, O_op; it)
+        return get_ExpectationValues_singlethread(peps, O_op; trial_state=trial_state, it=it)
     end
 end
 
@@ -40,7 +40,7 @@ function get_ExpectationValues_multithread(peps, O_op;
             Obser = @view Obs[slice, :]
             logψ_thread = @view logψs[slice]
             logpc_thread = @view logpcs[slice]
-            get_ExpectationValues!(peps, O_op, Obser, logψ_thread, logpc_thread; it=k)
+            get_ExpectationValues!(peps, O_op, Obser, logψ_thread, logpc_thread; trial_state=trial_state, it=k)
     end
 
     #return Obs, logψs, logpcs
@@ -54,7 +54,7 @@ function get_ExpectationValues_singlethread(peps, O_op;
     logψ = Array{Complex}(undef, it)
     logpc = Array{Complex}(undef, it)
     
-    get_ExpectationValues!(peps, O_op, O_loc, logψ, logpc; it)
+    get_ExpectationValues!(peps, O_op, O_loc, logψ, logpc; trial_state=trial_state, it=it)
     return O_loc, compute_importance_weights(logψ, logpc)
 end
 
