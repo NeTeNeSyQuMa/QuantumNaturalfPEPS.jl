@@ -92,7 +92,7 @@ function Base.vec(peps::AbstractPEPS; mask=peps.mask) # Flattens the tensors int
     type = eltype(peps)
     θ = Vector{type}(undef, length(peps; mask))
     pos = 1
-    for j in 1:size(peps, 1), i in 1:size(peps, 2)
+    for j in 1:size(peps, 2), i in 1:size(peps, 1)
         if mask[i,j] != 0
             shift = prod(dim.(inds(peps[i,j])))
             x = @view θ[pos:pos+shift-1]
