@@ -23,7 +23,7 @@ using QuantumNaturalfPEPS
 
             if i < Lx
                 
-                if t_ham != 0
+                if t != 0
                     Hubbard_ham .+= (-t, "Cdag", (i, j),   "C", (i+1, j))
                     Hubbard_ham .+= (-t, "Cdag", (i+1, j), "C", (i, j))
                 end
@@ -152,8 +152,8 @@ using QuantumNaturalfPEPS
     m_cdw = 1.0     # staggered onsite potential strength
 
     # staggered onsite potential
-    for y in 1:L, x in 1:L
-        idx = x + (y - 1) * L   # same linearization as build_general_H_BdG_2D_NN
+    for y in 1:Ly, x in 1:Lx
+        idx = x + (y - 1) * Lx   # same linearization as build_general_H_BdG_2D_NN
         η[idx] = -m_cdw * (-1)^(x + y)
     end
 
