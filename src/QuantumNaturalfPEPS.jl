@@ -42,8 +42,9 @@ include("Distributed/Distributed.jl")
 
 
 export PEPS
-export write!
+export write!, write_Tensor!
 export Ok_and_Ek
 export generate_Oks_and_Eks
+export get_observable
 
 end

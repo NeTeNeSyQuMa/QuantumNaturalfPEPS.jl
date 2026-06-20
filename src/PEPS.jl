@@ -402,10 +402,13 @@ function write_Tensor!(peps, tensor, i, j)
     else
         tensor = ITensor(tensor, indices)
     end
-    
+
     perm = NDTensors.getperm(inds(peps[i,j]), indices)
-    # TODO: Why do you permute the tensors here?
-    peps[i,j] = ITensor(permutedims(tensor.tensor, perm))
+    if perm == 1:length(indices) # if the orders already match
+        peps[i,j] = tensor # assign directly
+    else
+        peps[i,j] = ITensor(permutedims(tensor.tensor, perm))
+    end
 end
 
 # Writes Array of Tensors into fPEPS with a pattern e.g.
