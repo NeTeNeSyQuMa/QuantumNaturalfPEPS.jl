@@ -7,7 +7,7 @@ using QuantumNaturalfPEPS
     @testset "PEPS ordering is column-major" begin
         Lx = 2
         Ly = 3
-        hilbert = siteinds("S=1/2", Lx, Ly)
+        hilbert = ITensors.siteinds("S=1/2", Lx, Ly)
         peps = PEPS(hilbert; bond_dim=1)
 
         theta_vec = Float64[i for i in 1:2*Lx*Ly]
@@ -17,7 +17,7 @@ using QuantumNaturalfPEPS
     end
 
     @testset "Write a raw array into a local PEPS tensor with write_Tensor!" begin
-        hilbert = siteinds("S=1/2", 2, 1)
+        hilbert = ITensors.siteinds("S=1/2", 2, 1)
         peps = PEPS(hilbert; bond_dim=2) # 2-site peps
 
         # write data to the tensor at (2, 1) w/ total dimension 4 (2 physical x 2 virtual)
