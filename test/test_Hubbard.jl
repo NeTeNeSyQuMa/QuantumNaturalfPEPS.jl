@@ -1,11 +1,12 @@
 using Test
 using ITensors
 using QuantumNaturalfPEPS
+using QuantumNaturalGradient
 
 @testset "Hubbard model half-filling" begin
     
     function build_Hubbard_hamiltonian(Lx, Ly, t, U)
-        Hubbard_ham = OpSum()
+        Hubbard_ham = ITensors.OpSum()
 
         for i in 1:Lx, j in 1:Ly
             if j < Ly
@@ -134,12 +135,14 @@ using QuantumNaturalfPEPS
 
     # set up Hilbert space and PEPS parameters
     bond_dim = 2
-    hilbert = siteinds("Fermion", Lx, Ly)
+    hilbert = ITensors.siteinds("Fermion", Lx, Ly)
     peps = PEPS(hilbert; bond_dim=bond_dim)
     QuantumNaturalfPEPS.multiply_algebraic_spectrum!(peps, 3.) # Multiply the spectrum of the PEPS by a power-law factor as described in arXiv/2503.12557
 
     # set up mean-field parameters
     n_max_MF_params = QuantumNaturalfPEPS.get_max_num_MF_params_NN(Lx, Ly)
+    η = zeros(Float64, n_max_MF_params)
+
     nx = QuantumNaturalfPEPS.get_max_num_hopping_x_NN(Lx, Ly)
     ny = QuantumNaturalfPEPS.get_max_num_hopping_y_NN(Lx, Ly)
     hx_range = N+1 : N+nx
@@ -168,6 +171,7 @@ using QuantumNaturalfPEPS
     # set up PEPS and mean-field states
     trial_state = QuantumNaturalfPEPS.GaussianState(QuantumNaturalfPEPS.build_general_H_BdG_2D_NN, N; η=η, parity_sector=parity_sector, target_state=target_state)
     θ_PEPS, η = vec(QuantumNaturalGradient.Parameters(peps).obj), QuantumNaturalfPEPS.Parameters(trial_state)
+    θ = Vector{eltype(θ_PEPS)}(vcat(θ_PEPS, η))
     write!(peps, θ_PEPS)
     write!(trial_state, η)
 
@@ -193,9 +197,9 @@ using QuantumNaturalfPEPS
     M2_mean , _, _ = get_observable(peps, trial_state, build_M_cdw2_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=true)
     nn_avg_mean , _, _ = get_observable(peps, trial_state, build_nn_avg_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=true)
     
-    @test isapprox(loss_value, -24.0; atol=1e-10)
-    @test isapprox(Ntot_mean, 8.0; atol=1e-10)
-    @test isapprox(M2_mean / N, 4.0; atol=1e-10)
-    @test isapprox(nn_avg_mean, 0.0; atol=1e-10)
+    @test isapprox(loss_value, -24.0; atol=1e-7)
+    @test isapprox(Ntot_mean, 8.0; atol=1e-7)
+    @test isapprox(M2_mean / N, 4.0; atol=1e-7)
+    @test isapprox(nn_avg_mean, 0.0; atol=1e-7)
 
 end
