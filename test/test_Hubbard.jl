@@ -2,6 +2,9 @@ using Test
 using ITensors
 using QuantumNaturalfPEPS
 using QuantumNaturalGradient
+using Random
+
+Random.seed!(1234)
 
 @testset "Hubbard model half-filling" begin
     
@@ -132,6 +135,8 @@ using QuantumNaturalGradient
     Nsamples = 1000
     maxiters = 50
     Nmeasure = 100
+    multiproc=false
+    shared_array=false
 
     # set up Hilbert space and PEPS parameters
     bond_dim = 2
@@ -180,7 +185,7 @@ using QuantumNaturalGradient
     # Setup the Integrator and Solver
     integrator = QuantumNaturalGradient.Euler(lr=0.05)
     solver = QuantumNaturalGradient.EigenSolver()
-    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(peps, Hubbard_ham; trial_state=trial_state, multiproc=true, shared_array=true)
+    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(peps, Hubbard_ham; trial_state=trial_state, multiproc=multiproc, shared_array=shared_array)
     callback, θ_history, θ_PEPS_history, η_history = build_history_callback()
 
     @time loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ; 
@@ -194,14 +199,15 @@ using QuantumNaturalGradient
     η_history_mat = hcat(η_history...);
     θ_history_mat = hcat(θ_history...);
 
-    energy = loss_value
-    Ntot_mean , _, _ = get_observable(peps, trial_state, build_Ntot_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=true)
-    M2_mean , _, _ = get_observable(peps, trial_state, build_M_cdw2_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=true)
-    nn_avg_mean , _, _ = get_observable(peps, trial_state, build_nn_avg_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=true)
-    
-    @test isapprox(loss_value, -24.0; atol=1e-4)
-    @test isapprox(Ntot_mean, 8.0; atol=1e-4)
-    @test isapprox(M2_mean / N, 4.0; atol=1e-4)
-    @test isapprox(nn_avg_mean, 0.0; atol=1e-4)
+    energy , energy_err, _ = get_observable(peps, trial_state, Hubbard_ham, trained_θ; sample_nr=Nmeasure, multiproc=multiproc)
+    Ntot_mean , Ntot_err, _ = get_observable(peps, trial_state, build_Ntot_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=multiproc)
+    M2_mean , M2_error, _ = get_observable(peps, trial_state, build_M_cdw2_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=multiproc)
+    nn_avg_mean , nn_avg_error, _ = get_observable(peps, trial_state, build_nn_avg_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=multiproc)
+
+    atol = 1e-8
+    @test abs(Ntot_mean - 8.0) <= 5Ntot_err + atol
+    @test abs(loss_value - (-24.0)) <= 5energy_err + atol
+    @test abs(M2_mean / N - 4.0) <= M2_error + atol
+    @test abs(nn_avg_mean - 0.0) <= nn_avg_error + atol
 
 end
