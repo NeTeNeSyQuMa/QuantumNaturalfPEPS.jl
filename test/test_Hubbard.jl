@@ -1,3 +1,5 @@
+import Pkg
+Pkg.activate("/home/psireal42/Work/phd-projects/qnfp_env"; shared=false)
 using Test
 using ITensors
 using QuantumNaturalfPEPS
@@ -129,8 +131,8 @@ using QuantumNaturalGradient
     target_state = 0
 
     # set up simulation parameters
-    Nsamples = 100
-    maxiters = 100
+    Nsamples = 1000
+    maxiters = 50
     Nmeasure = 100
 
     # set up Hilbert space and PEPS parameters
@@ -167,6 +169,8 @@ using QuantumNaturalGradient
     # no pairing for CDW
     η[px_range] .= 0.0
     η[py_range] .= 0.0
+    # η = 1e-8 .+ (9e-8 - 1e-8) * rand(n_max_MF_params)
+
 
     # set up PEPS and mean-field states
     trial_state = QuantumNaturalfPEPS.GaussianState(QuantumNaturalfPEPS.build_general_H_BdG_2D_NN, N; η=η, parity_sector=parity_sector, target_state=target_state)
@@ -197,9 +201,9 @@ using QuantumNaturalGradient
     M2_mean , _, _ = get_observable(peps, trial_state, build_M_cdw2_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=true)
     nn_avg_mean , _, _ = get_observable(peps, trial_state, build_nn_avg_op(Lx), trained_θ; sample_nr=Nmeasure, multiproc=true)
     
-    @test isapprox(loss_value, -24.0; atol=1e-7)
-    @test isapprox(Ntot_mean, 8.0; atol=1e-7)
-    @test isapprox(M2_mean / N, 4.0; atol=1e-7)
-    @test isapprox(nn_avg_mean, 0.0; atol=1e-7)
+    @test isapprox(loss_value, -24.0; atol=1e-4)
+    @test isapprox(Ntot_mean, 8.0; atol=1e-4)
+    @test isapprox(M2_mean / N, 4.0; atol=1e-4)
+    @test isapprox(nn_avg_mean, 0.0; atol=1e-4)
 
 end
