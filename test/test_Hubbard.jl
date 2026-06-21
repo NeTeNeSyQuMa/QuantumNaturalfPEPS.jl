@@ -1,5 +1,3 @@
-import Pkg
-Pkg.activate("/home/psireal42/Work/phd-projects/qnfp_env"; shared=false)
 using Test
 using ITensors
 using QuantumNaturalfPEPS
