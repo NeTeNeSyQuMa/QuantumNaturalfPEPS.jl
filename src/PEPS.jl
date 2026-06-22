@@ -88,10 +88,26 @@ function set_params!(peps::AbstractPEPS, tensors)
 end
 
 Base.convert(::Type{Vector}, peps::AbstractPEPS; kwargs...) = vec(peps; kwargs...)
-function Base.vec(peps::AbstractPEPS; mask=peps.mask) # Flattens the tensors into a vector (using Column major ordering) NOTE: Why was it even row major before? Everything else is column major...
+function Base.vec(peps::AbstractPEPS; mask=peps.mask, use_row_major_ordering=false) # Flattens the tensors into a vector (using Column major ordering) NOTE: Why was it even row major before? Everything else is column major...
     type = eltype(peps)
     θ = Vector{type}(undef, length(peps; mask))
     pos = 1
+
+    if use_row_major_ordering
+        for i in 1:size(peps, 1), j in 1:size(peps, 2)
+            if mask[i,j] != 0
+                shift = prod(dim.(inds(peps[i,j])))
+                x = @view θ[pos:pos+shift-1]
+                permute_reshape_and_copy!(x, peps[i, j], (siteind(peps, i, j), linkinds(peps, i, j)...))
+                pos = pos+shift
+            end
+        end
+        return θ
+    end
+
+    # Note: Remove in 1 month or so
+    @warn "(Backward compatibility) Using column-major ordering for vec(peps) and write!(peps). This change was implemented on 22.06.2026. If you want to restart a previous simulation with a saved vec(peps) object, you must set set the keyword argument use_row_major_ordering=true." maxlog=1
+
     for j in 1:size(peps, 2), i in 1:size(peps, 1)
         if mask[i,j] != 0
             shift = prod(dim.(inds(peps[i,j])))
@@ -116,23 +132,45 @@ function Base.length(peps::AbstractPEPS; mask=peps.mask)
 end
 
 # column major version of write!
-function write!(peps::AbstractPEPS, θ::Vector{T}; reset_double_layer=true, mask=peps.mask) where T# Writes the vector θ into the tensors.
+function write!(peps::AbstractPEPS, θ::Vector{T}; reset_double_layer=true, mask=peps.mask, use_row_major_ordering=false) where T# Writes the vector θ into the tensors.
     @assert eltype(peps) == T "The type of the PEPS is $(eltype(peps)) and the type of the vector θ is $T. They must be the same type."
     pos = 1
-    for j in 1:size(peps, 2), i in 1:size(peps, 1)
-        if mask[i,j] != 0
-            shift = prod(dim.(inds(peps[i,j])))
-            θi = @view θ[pos:(pos+shift-1)]
-            pos += shift
 
-            # If peps is not in the right order define new tensor
-            if inds(peps[i,j])[1] != siteind(peps, i, j) || inds(peps[i,j])[2:end] != linkinds(peps, i, j)
-                peps[i, j] = ITensor(θi, (siteind(peps, i, j), linkinds(peps, i, j)...))
-            
-            else # If in the right order, copy the values
-                peps[i, j][:] = reshape(θi, dim.(inds(peps[i,j])))
+    if use_row_major_ordering
+        for i in 1:size(peps, 1), j in 1:size(peps, 2)
+            if mask[i,j] != 0
+                shift = prod(dim.(inds(peps[i,j])))
+                θi = @view θ[pos:(pos+shift-1)]
+                pos += shift
+
+                # If peps is not in the right order define new tensor
+                if inds(peps[i,j])[1] != siteind(peps, i, j) || inds(peps[i,j])[2:end] != linkinds(peps, i, j)
+                    peps[i, j] = ITensor(θi, (siteind(peps, i, j), linkinds(peps, i, j)...))
+                
+                else # If in the right order, copy the values
+                    peps[i, j][:] = reshape(θi, dim.(inds(peps[i,j])))
+                end
+                
             end
-            
+        end
+    else
+        # NOTE: Remove in 1 month or so
+        @warn "(Backward compatibility) Using column-major ordering for vec(peps) and write!(peps). This change was implemented on 22.06.2026. If you want to restart a previous simulation with a saved vec(peps) object, you must set set the keyword argument use_row_major_ordering=true." maxlog=1
+        for j in 1:size(peps, 2), i in 1:size(peps, 1)
+            if mask[i,j] != 0
+                shift = prod(dim.(inds(peps[i,j])))
+                θi = @view θ[pos:(pos+shift-1)]
+                pos += shift
+
+                # If peps is not in the right order define new tensor
+                if inds(peps[i,j])[1] != siteind(peps, i, j) || inds(peps[i,j])[2:end] != linkinds(peps, i, j)
+                    peps[i, j] = ITensor(θi, (siteind(peps, i, j), linkinds(peps, i, j)...))
+                
+                else # If in the right order, copy the values
+                    peps[i, j][:] = reshape(θi, dim.(inds(peps[i,j])))
+                end
+                
+            end
         end
     end
 

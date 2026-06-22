@@ -1,4 +1,4 @@
-using Random, LinearAlgebra, JLD2, TimerOutputs, ITensors, Distributed
+using Random, LinearAlgebra, JLD2, TimerOutputs, ITensors, ITensorMPS, Distributed
 JLD2.rconvert(T::Type, x::Tuple{Symbol}) = (x[1], x[1])
 using QuantumNaturalGradient
 using QuantumNaturalfPEPS
