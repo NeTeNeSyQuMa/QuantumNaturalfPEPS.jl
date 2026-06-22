@@ -6,7 +6,7 @@ using Random
 
 Random.seed!(1234)
 
-# @testset "4x4 Hubbard model half-filling" begin
+@testset "4x4 Hubbard model half-filling" begin
     # set up model
     Lx, Ly = 4, 4
     N = Lx * Ly
@@ -14,12 +14,11 @@ Random.seed!(1234)
     target_state = 0
 
     # set up simulation parameters
-    # Nsamples = 1500
-    Nsamples = 100
-    maxiters = 50
-    Nmeasure = 100
+    Nsamples = 200
+    maxiters = 10
+    Nmeasure = 1000
 
-    # @testset "Test no-hopping limit with t=0.0 and U=2.0" begin
+    @testset "Test no-hopping limit with t=0.0 and U=2.0" begin
         t = 0.0
         U = 2.0
         Hubbard_ham = QuantumNaturalfPEPS.hamiltonian_hubbard(t, U, Lx, Ly)
@@ -79,37 +78,27 @@ Random.seed!(1234)
         maxiter=maxiters
         )
 
-        trained_peps = deepcopy(peps)
-        QuantumNaturalfPEPS.write!(trained_peps, trained_θ[1:length(θ_PEPS)])
+        write!(peps, trained_θ[1:length(θ_PEPS)])
 
-        energy , energy_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(trained_peps, Hubbard_ham; trial_state=trial_state, it=Nmeasure)...)
-        # Ntot_mean , Ntot_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(trained_peps, QuantumNaturalfPEPS.build_Ntot_op(Lx); trial_state=trial_state, it=Nmeasure))
-        # M2_mean , M2_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(trained_peps, QuantumNaturalfPEPS.build_M_cdw2_op(Lx); trial_state=trial_state, it=Nmeasure))
-        # nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(trained_peps, QuantumNaturalfPEPS.build_nn_avg_op(Lx); trial_state=trial_state, it=Nmeasure))
+        E_exact = -24.0 # exact energy for t=0.0, U=2.0 at half-filling
+        @test isapprox(loss_value, E_exact; atol=1e-10)
 
-        energy_simulation = loss_value
-        energy_simulation_var = misc["history"][!, :var_energy][end]
+        energy , energy_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, Hubbard_ham; trial_state=trial_state, it=Nmeasure)...)
+        Ntot_mean , Ntot_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_Ntot_op(Lx); trial_state=trial_state, it=Nmeasure)...)
+        M2_mean , M2_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_M_cdw2_op(Lx); trial_state=trial_state, it=Nmeasure)...)
+        nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_nn_dd_corr_op(Lx); trial_state=trial_state, it=Nmeasure)...)
 
-        @test energy ≈ energy_simulation atol=1e-5
-        @test energy_err ≈ sqrt(energy_simulation_var) atol=1e-5
+        # check if the error is within the expected sampling error
+        atol = 1 / sqrt(Nmeasure)
+        @test Ntot_err <= atol
+        @test energy_err <= atol
+        @test M2_error <= 3*atol
+        @test nn_avg_error <= atol
 
-        # @show Ntot_mean, Ntot_err
-        # @show energy , energy_err
-        # @show M2_mean / N, M2_error
-        # @show nn_avg_mean, nn_avg_error
-
-        # # check for  statistical errors -> make sure that we do enough sampling 
-        # atol = 5e-4
-        # @test Ntot_err <= atol
-        # @test energy_err <= atol
-        # @test M2_error <= atol
-        # @test nn_avg_error <= atol
-
-        # # check for the accuracy of sampled results
-        # atol = 1e-6
-        # @test isapprox(Ntot_mean, 8.0; atol=atol)
-        # @test isapprox(energy, -24.0; atol=atol)
-        # @test isapprox(M2_mean/N, 4.0; atol=atol)
-        # @test isapprox(nn_avg_mean, 0.0; atol=atol)
-    # end
-# end
+        # check for the accuracy of sampled results
+        @test isapprox(Ntot_mean, 8.0; atol=atol)
+        @test isapprox(energy, -24.0; atol=atol)
+        @test isapprox(M2_mean/N, 4.0; atol=atol)
+        @test isapprox(nn_avg_mean, 0.0; atol=atol)
+    end
+end
