@@ -109,6 +109,7 @@ function get_ExpectationValues_multiproc(peps, O_op;
     return Obs, compute_importance_weights(logψs, logpcs)
 end
 
+# Is this function used?
 function get_ExpectationValue_sample(peps, O_op, S; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])))
     O_loc = Array{Complex}(undef, 1, length(O_op))
     logψ = Array{Complex}(undef, 1)
@@ -119,15 +120,14 @@ function get_ExpectationValue_sample(peps, O_op, S; trial_state::AbstractTrialSt
 end
 
 function weighted_mean_error(O_loc, importance_weights) 
-    x = real.(O_loc)
-    w = real.(importance_weights)
+    w = importance_weights
 
     sumw = sum(w)
-    μ = sum(w .* x) / sumw
+    μ = real(sum(O_loc[:,1] .* w) / sumw)
+    var = real(sum(w .* abs2.(O_loc[:,1] .- μ)) / sumw)
+    neff = 1 / sum( abs2.(w ./ sumw))
+    # neff = abs2(sumw) / sum(abs2, w)
+    std_err = sqrt(var / max(neff, 1e-12))
 
-    var = sum(w .* abs2.(x .- μ)) / sumw
-    neff = abs2(sumw) / sum(abs2, w)
-    err = sqrt(var / max(neff, 1e-12))
-
-    return μ, err, neff
+    return μ, std_err, neff
 end
