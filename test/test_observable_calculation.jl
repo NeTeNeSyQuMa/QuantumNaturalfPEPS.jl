@@ -73,12 +73,10 @@ Random.seed!(1234)
 
         @time loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ; 
         integrator, 
-        verbosity=2,
+        verbosity=0,
         sample_nr=Nsamples,
         maxiter=maxiters
         )
-
-        write!(peps, trained_θ[1:length(θ_PEPS)])
 
         E_exact = -24.0 # exact energy for t=0.0, U=2.0 at half-filling
         @test isapprox(loss_value, E_exact; atol=1e-10)
