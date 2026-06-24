@@ -78,7 +78,9 @@ Random.seed!(1234)
     #     maxiter=maxiters
     #     )
 
-    #     E_exact = -24.0 # exact energy for t=0.0, U=2.0 at half-filling
+    #     # CDW (t=0): n_i n_j=0 (no doubly-occupied NN bonds), each of the N_b=24 NN bonds (4×4 OBC) has one occupied site.
+    #     # E = -U/2 * N_b = -2/2 * 24 = -24.
+    #     E_exact = -24.0
     #     @test isapprox(loss_value, E_exact; atol=1e-10)
 
     #     energy , energy_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, Hubbard_ham; trial_state=trial_state, it=Nmeasure)...)
@@ -148,6 +150,8 @@ Random.seed!(1234)
         maxiter=maxiters
         )
 
+        # Free fermion (U=0) 4×4 OBC: ε_{m,n} = -2t[cos(mπ/5)+cos(nπ/5)]; 6 negative levels -(1+√5), -√5(×2), -(√5-1), -1(×2).
+        # At half-filling (N=8), filling 6 negative + 2 zero-energy levels: E = -(1+√5) - 2√5 - (√5-1) - 2·1 = -2 - 4√5.
         E_exact = -2 - 4*sqrt(5)
         @test isapprox(loss_value, E_exact; atol=1e-10)
 
