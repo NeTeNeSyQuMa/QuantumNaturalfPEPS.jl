@@ -106,34 +106,11 @@ Parameters(GS::GaussianState) = GS.η
 Updates the variational parameters `η` of the Gaussian state `GS` and recompute the covariance matrix `Γ` and the Slater log-gradient cache accordingly.
 
 """
-# function write!(GS::GaussianState, η::AbstractVector{<:Number})
-#     GS.η = η
-#     GS.Γ, GS.occ_ref = get_Γ_from_H_BdG(GS.H_BdG_func(η, GS.N), GS.parity_sector; target_state=GS.target_state)
-#     GS.slater_loggrad_cache = build_slater_loggradient_cache(GS.H_BdG_func, η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state)
-#     GS.amplitude_cache = build_amplitude_cache(GS.H_BdG_func(η, GS.N), GS.parity_sector, GS.occ_ref)
-# end
 function write!(GS::GaussianState, η::AbstractVector{<:Number})
-    try
-        GS.η = η
-        H = GS.H_BdG_func(η, GS.N)
-
-        GS.Γ, GS.occ_ref =
-            get_Γ_from_H_BdG(H, GS.parity_sector;
-                             target_state=GS.target_state)
-
-        GS.slater_loggrad_cache =
-            build_slater_loggradient_cache(
-                GS.H_BdG_func, η, GS.N;
-                parity_sector=GS.parity_sector,
-                target_state=GS.target_state,
-            )
-
-        GS.amplitude_cache =
-            build_amplitude_cache(H, GS.parity_sector, GS.occ_ref)
-    catch err
-        @error "Failed to update GaussianState" η=copy(η) exception=(err, catch_backtrace())
-        rethrow()
-    end
+    GS.η = η
+    GS.Γ, GS.occ_ref = get_Γ_from_H_BdG(GS.H_BdG_func(η, GS.N), GS.parity_sector; target_state=GS.target_state)
+    GS.slater_loggrad_cache = build_slater_loggradient_cache(GS.H_BdG_func, η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state)
+    GS.amplitude_cache = build_amplitude_cache(GS.H_BdG_func(η, GS.N), GS.parity_sector, GS.occ_ref)
 end
 
 ###########################################################################################################
