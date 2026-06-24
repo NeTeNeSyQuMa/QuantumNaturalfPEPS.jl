@@ -1,4 +1,6 @@
 using Test
+import Pkg
+Pkg.activate("/home/psireal42/Work/phd-projects/qnfp_env"; shared=false)
 using ITensors
 using QuantumNaturalfPEPS
 using QuantumNaturalGradient
@@ -88,7 +90,7 @@ Random.seed!(1234)
 
         @time loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ; 
         integrator, 
-        verbosity=2,
+        verbosity=0,
         sample_nr=Nsamples,
         maxiter=maxiters
         )
@@ -168,7 +170,7 @@ Random.seed!(1234)
 
         @time loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ; 
         integrator, 
-        verbosity=2,
+        verbosity=0,
         sample_nr=Nsamples,
         maxiter=maxiters
         )
