@@ -1,6 +1,4 @@
 using Test
-import Pkg
-Pkg.activate("/home/psireal42/Work/phd-projects/qnfp_env"; shared=false)
 using ITensors
 using QuantumNaturalfPEPS
 using QuantumNaturalGradient
