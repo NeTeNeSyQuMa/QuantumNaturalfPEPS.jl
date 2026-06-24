@@ -1015,11 +1015,19 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
     
     # Bring P_bar to canonical form by block-diagonalizing within degenerate subspaces of Q to avoid mixing
     # As P_bar is block diagonal
+    #
+    # `degeneracy_atol` groups the eigenvalues of Q into degenerate subspaces. Different LAPACK/BLAS
+    # builds (OpenBLAS on Linux vs. Windows) resolve degenerate eigenvalues only to ~1e-10, so a tight
+    # 1e-10 tolerance splits a structured degenerate block into 1×1 pieces on some platforms; those then
+    # take the `S_sub = I` fallback and leave the real O(1) pairing un-canonicalized, giving a complex
+    # Ubar/Vbar and a broken reconstruction (CI passed on Windows but failed on Ubuntu). The eigenvalues
+    # of Q ∈ [0, 1] are either degenerate to ≲1e-10 or separated by ≳1e-5, so 1e-8 sits safely in between.
+    degeneracy_atol = 1e-8
     S = zeros(ComplexF64, size(P_bar))
     visited = falses(length(E_Q)) # Track which indices have been processed
     for i in 1:length(E_Q)
         if !visited[i]
-            idx = findall(x -> isapprox(x, E_Q[i]; atol=1e-10), E_Q)
+            idx = findall(x -> isapprox(x, E_Q[i]; atol=degeneracy_atol), E_Q)
             visited[idx] .= true # Mark all indices in this block as visited
             P_sub = P_bar[idx, idx] # Extract the sub-block corresponding to the eigenvalue
             if norm(P_sub, Inf) < 1e-10
