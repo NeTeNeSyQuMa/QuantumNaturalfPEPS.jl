@@ -2,7 +2,7 @@ using Test
 using ITensors, ITensorMPS
 using QuantumNaturalfPEPS
 
-@testset "PEPS functionalities" begin
+@testset "PEPS structure and helper functions" begin
 
     @testset "PEPS ordering is column-major" begin
         Lx = 2
