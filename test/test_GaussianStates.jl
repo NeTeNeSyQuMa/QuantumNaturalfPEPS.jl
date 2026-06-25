@@ -158,6 +158,37 @@ using QuantumNaturalfPEPS
                 end
             end
         end
+
+        @testset "Marginal probabilities at zero modes (sampling)" begin
+            # The joint sampler draws site-by-site from the Gaussian marginal `get_prob(GS, occ_dict)`, so
+            # its robustness rests on that marginal being (i) normalized and (ii) consistent with summing
+            # the full distribution over the unmeasured sites. We check both at parameter points with zero
+            # modes / degenerate spectra (t=Δ, μ=0) AND at a particle-number-conserving Slater point (Δ=0,
+            # all Bloch-Messiah blocks fully occupied/empty). Where `get_amplitude` is itself normalized
+            # (Δ≠0) we additionally cross-check it as an independent ground truth.
+            param_set = [(1.0, 1.0, 0.0), (1.0, 1.0, 1.0), (1.0, 0.0, 0.5), (2.0, 2.0, 0.0)]
+            N = 4
+            for ps in (0, 1), (t, Δ, μ) in param_set
+                GS = QuantumNaturalfPEPS.GaussianState(build_H_BdG_mat, N; η=[t, Δ, μ], parity_sector=ps, target_state=0)
+                # (i) the full Gaussian distribution normalizes to 1
+                p_full(occ) = QuantumNaturalfPEPS.get_prob(GS, occ)
+                @test isapprox(sum(p_full(digits(idx, base=2, pad=N)) for idx in 0:(2^N - 1)), 1.0; atol=1e-8)
+                for k in 1:(N - 1), pidx in 0:(2^k - 1)
+                    prefix = digits(pidx, base=2, pad=k)
+                    # (ii) the marginal of the first k sites equals summing the full distribution over the rest
+                    summed = sum(p_full(vcat(prefix, digits(s, base=2, pad=N - k))) for s in 0:(2^(N - k) - 1))
+                    marginal = QuantumNaturalfPEPS.get_prob(GS, Dict(i => prefix[i] for i in 1:k))
+                    @test isapprox(marginal, summed; atol=1e-8)
+                end
+                # independent ground truth where the amplitude is normalized (no fully occupied/empty blocks)
+                if Δ != 0
+                    for idx in 0:(2^N - 1)
+                        occ = digits(idx, base=2, pad=N)
+                        @test isapprox(p_full(occ), abs2(QuantumNaturalfPEPS.get_amplitude(GS, occ)); atol=1e-10)
+                    end
+                end
+            end
+        end
     end
 
     @testset "Gaussian states (complex MF parameters)" begin
