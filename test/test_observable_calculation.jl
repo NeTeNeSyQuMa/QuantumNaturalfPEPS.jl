@@ -6,7 +6,7 @@ using Random
 
 Random.seed!(1234)
 
-# @testset "4x4 Hubbard model half-filling" begin
+@testset "4x4 Hubbard model half-filling" begin
     # set up model
     Lx, Ly = 4, 4
     N = Lx * Ly
@@ -26,7 +26,7 @@ Random.seed!(1234)
     maxiters = 10
     Nmeasure = 1000
 
-    # @testset "Test no-hopping limit with t=0.0 and U=2.0" begin
+    @testset "Test no-hopping limit with t=0.0 and U=2.0" begin
         t = 0.0
         U = 2.0
         Hubbard_ham = QuantumNaturalfPEPS.hamiltonian_hubbard(t, U, Lx, Ly)
@@ -34,9 +34,9 @@ Random.seed!(1234)
         # set up Hilbert space and PEPS parameters
         bond_dim = 1 # ground state is a CDW and should be completely described by the Gaussian state, so a trivial PEPS is sufficient
         hilbert = ITensors.siteinds("Fermion", Lx, Ly)
-        # peps = PEPS(hilbert; bond_dim=bond_dim, tensor_init=constant_peps_tensor)
-        peps = PEPS(hilbert; bond_dim=bond_dim)
-        QuantumNaturalfPEPS.multiply_algebraic_spectrum!(peps, 3.) # Multiply the spectrum of the PEPS by a power-law factor as described in arXiv/2503.12557
+        peps = PEPS(hilbert; bond_dim=bond_dim, tensor_init=constant_peps_tensor)
+        # peps = PEPS(hilbert; bond_dim=bond_dim)
+        # QuantumNaturalfPEPS.multiply_algebraic_spectrum!(peps, 3.) # Multiply the spectrum of the PEPS by a power-law factor as described in arXiv/2503.12557
 
         # set up mean-field parameters
         n_max_MF_params = QuantumNaturalfPEPS.get_max_num_MF_params_NN(Lx, Ly)
@@ -82,7 +82,7 @@ Random.seed!(1234)
 
         @time loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ; 
         integrator, 
-        verbosity=2,
+        verbosity=0,
         sample_nr=Nsamples,
         maxiter=maxiters
         )
@@ -109,9 +109,9 @@ Random.seed!(1234)
         @test isapprox(energy, E_exact; atol=atol)
         @test isapprox(M2_mean/N, 4.0; atol=atol)
         @test isapprox(nn_avg_mean, 0.0; atol=atol)
-    # end
+    end
 
-    # @testset "Test no onsite-potential limit with t=1.0 and U=0.0" begin
+    @testset "Test no onsite-potential limit with t=1.0 and U=0.0" begin
         t = 1.0
         U = 0.0
         Hubbard_ham = QuantumNaturalfPEPS.hamiltonian_hubbard(t, U, Lx, Ly)
@@ -156,12 +156,10 @@ Random.seed!(1234)
 
         @time loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ; 
         integrator, 
-        verbosity=2,
+        verbosity=0,
         sample_nr=Nsamples,
         maxiter=maxiters
         )
-
-        trained_θ[length(θ_PEPS)+1:N]
 
         # Free fermion (U=0) 4×4 OBC: ε_{m,n} = -2t[cos(mπ/5)+cos(nπ/5)]; 6 negative levels -(1+√5), -√5(×2), -(√5-1), -1(×2).
         # At half-filling (N=8), filling 6 negative + 2 zero-energy levels: E = -(1+√5) - 2√5 - (√5-1) - 2·1 = -2 - 4√5.
@@ -185,5 +183,5 @@ Random.seed!(1234)
         @test isapprox(energy, -2-4*sqrt(5); atol=atol)
         @test isapprox(M2_mean/N, 11/24; atol=atol)
         @test isapprox(nn_avg_mean, (721/3600)-(sqrt(5)/240); atol=atol)
-    # end
-# end
+    end
+end;
