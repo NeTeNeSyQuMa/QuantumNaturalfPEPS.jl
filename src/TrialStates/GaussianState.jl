@@ -794,7 +794,7 @@ function bogoliubov(H::Hermitian; tol=1e-8)
     
     if n_zero_pairs > 0
         Dblock = @view H[1:N, N+1:end]
-        if maximum(abs, Dblock) < 1e-8 * max(maximum(abs, H), one(real(eltype(H))))
+        if maximum(abs, Dblock) < 1e-7 * max(maximum(abs, H), one(real(eltype(H))))
             # Number-conserving Hamiltonian (no pairing): the zero modes are particle-hole *pairs*
             # ([u;0] particle / [0;v] hole), not genuine Majoranas. Treating them as Majoranas would mix
             # particle and hole and give a non-integer ⟨N⟩. Instead we keep them as ordinary single-particle
