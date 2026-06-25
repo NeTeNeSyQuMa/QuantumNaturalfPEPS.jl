@@ -64,7 +64,7 @@ end
     # create tight binding Hamiltonian and corresponding Gaussian state
     N = L*L
     # simple Tight-binding Hamiltonian as test
-    η = [1.0, 0.0, 0.0]
+    η = [1.0, 1.0, 0.0]
     GS = QuantumNaturalfPEPS.GaussianState(_build_H_BdG_mat, N; η=η)
 
     # exact prob distribution from Gaussian state
