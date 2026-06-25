@@ -9,7 +9,7 @@ Random.seed!(1234)
 
 N = 4
 
-η_exact_arr = [[1.0, 2.0, -0.2], [1.0, -2.0, 0.05], [-5.0, 4.0, 0.01]]
+η_exact_arr = [[1.0, 2.0, -0.2], [1.0, -2.0, 0.05], [-5.0, 4.0, 0.01], [1.0,1.0,0.0]]
 η0_arr = [rand(3) for _ in 1:length(η_exact_arr)]
 
 function build_H_BdG_mat(η, N)

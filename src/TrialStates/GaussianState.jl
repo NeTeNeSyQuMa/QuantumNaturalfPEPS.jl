@@ -100,6 +100,9 @@ getParity(Γ::AbstractMatrix) = Int(sign(real(pfaffian(2 * Γ)))) == 1 ? 0 : 1
 
 Parameters(GS::GaussianState) = GS.η
 
+# Gaussian (Bloch-Messiah/Pfaffian) amplitudes ⟨s|ψ⟩ are complex in general, so a joint PEPS×Gaussian wavefunction is complex even when the PEPS is real. 
+Base.eltype(::GaussianState) = ComplexF64
+
 """
     write!(GS::GaussianState, η::AbstractVector{<:Number})
 
@@ -558,28 +561,30 @@ function build_slater_loggradient_cache(
     dHs = build_H_BdG_derivatives(H_BdG_func, η, N)
     dΓs = Vector{Matrix{ComplexF64}}(undef, length(dHs))
     # =========================================================================
-    # Solve commutator equation: [H, dΓ] = -[dH, Γ] to get dΓ
-    #  => H dΓ - dΓ H = -[dH, Γ]
-    # 
-    # We can use the Sylvester equation for that:
-    # X = sylvester(A, B, C), solves AX + XB + C = 0
-    # with A = H, B = -H, C = -[dH, Γ], such that X = dΓ
+    # Solve the commutator equation [H, dΓ] = -[dH, Γ] for dΓ = ∂η Γ.
+    #
+    # `H_maj` is real antisymmetric, so `i·H_maj` is Hermitian with real single-particle energies `μ`
+    # and a unitary eigenbasis `Uh`: H_maj = Uh·diag(-iμ)·Uh'. In that basis the equation decouples,
+    #     (λa - λb) dΓ'_ab = -C'_ab ,   λ = -iμ ,  C = [dH, Γ] ,
+    # so dΓ'_ab = -C'_ab / (λa - λb) wherever λa ≠ λb. Where μa = μb (a degenerate subspace — in
+    # particular the zero modes) the operator has a kernel and dΓ is undetermined at first order. We take
+    # the minimum-norm (pseudo-inverse) solution and set those components to zero. The previous code
+    # instead divided by a tiny `reg`, which amplified numerical noise in the degenerate block into huge
+    # spurious mean-field gradients (~1e3) that froze the natural-gradient optimization at zero-mode
+    # points. `deg_tol` adapts to the spectral scale (cf. `zero_mode_threshold`) instead of being a
+    # hardcoded absolute number: it sits well above the eigensolver's resolution of a degenerate `μ`
+    # cluster and well below any physical gap.
     # =========================================================================
-    I_dim = Matrix{ComplexF64}(I, dim, dim)
-
-    # Optional regularization near gap closings: H dΓ - dΓ (H + reg) + C = 0 to make it more robust
-    reg = 1e-10
-    B = -H_maj + reg .* I_dim
+    Fh = eigen(Hermitian(im .* Matrix(H_maj)))
+    μ = Fh.values; Uh = Fh.vectors
+    deg_tol = 1e-7 * max(maximum(abs, μ), one(eltype(μ)))
+    invden = ComplexF64[abs(μ[a] - μ[b]) > deg_tol ? 1 / (im * (μ[a] - μ[b])) : 0
+                        for a in 1:dim, b in 1:dim]
     for a in eachindex(dHs)
-        dH = Matrix(dHs[a])
-        dH_maj = transform_H_to_majorana_qq(dH)
-
-        C = (dH_maj * Γ - Γ * dH_maj) # +[dH, Γ]
-
-        dΓ = LinearAlgebra.sylvester(H_maj, B, C) # dΓ given by the solution to the Sylvester equation
-        dΓ = 0.5 .* (dΓ .- transpose(dΓ)) # Enforce exact skew-symmetry: Γᵀ = -Γ
-
-        # Remove tiny numerical noise
+        dH_maj = transform_H_to_majorana_qq(Matrix(dHs[a]))
+        C = dH_maj * Γ - Γ * dH_maj                    # [dH, Γ]
+        dΓ = Uh * ((Uh' * C * Uh) .* invden) * Uh'     # min-norm solution of [H_maj, dΓ] = -C
+        dΓ = 0.5 .* (dΓ .- transpose(dΓ))              # enforce exact skew-symmetry: Γᵀ = -Γ
         dΓ[abs.(dΓ) .< 1e-14] .= 0.0
         dΓs[a] = dΓ
     end
@@ -729,6 +734,30 @@ function get_bogoliubov_blocks(M::AbstractMatrix)
 end
 
 """
+    zero_mode_threshold(E; rel_floor=1e-11, rel_ceiling=1e-4)
+
+Choose, from the spectrum `E` of a BdG Hamiltonian, the energy below which a mode is treated as a zero
+mode. A fixed absolute tolerance is not generic and we use the meaningful scale: `‖H‖ ≈ maximum(|E|)`
+
+Idea: consider modes with `|E| ≤ rel_ceiling·‖H‖` as zero-mode candidates and put the cut at the
+geometric mean of the top of that cluster and the bottom of the bulk — i.e. inside the gap, as far as
+possible from both sides. If there are no candidates the system is gapped and only genuine machine-zeros
+(`|E| ≤ rel_floor·‖H‖`) count. This makes the classification scale-invariant; the residual ambiguity (a
+genuinely small isolated mode with no gap) is unavoidable and is caught loudly by the even-count assertion
+in `bogoliubov` rather than silently corrupting the state. `rel_ceiling` is deliberately generous: a true
+small physical mode comes in a `±E` pair, so it is classified consistently either way.
+"""
+function zero_mode_threshold(E::AbstractVector; rel_floor=1e-11, rel_ceiling=1e-4)
+    scale = maximum(abs, E)
+    scale == 0 && return float(one(scale))          # H ≡ 0: handled by the caller's even-count check
+    a = sort(abs.(E))
+    k = count(<(rel_ceiling * scale), a)            # number of near-zero candidates
+    k == 0 && return rel_floor * scale              # gapped: only machine-zeros are zero modes
+    upper = k < length(a) ? a[k+1] : scale          # bottom of the bulk spectrum
+    return sqrt(a[k] * upper)                       # cut in the middle of the gap (log scale)
+end
+
+"""
     bogoliubov(H::Hermitian)
 
 Return the spectrum and canonical transform that diagonalize the fermionic quadratic Hamiltonian `H`.
@@ -750,7 +779,13 @@ Degenerate spectra are handled robustly by splitting the modes into two groups:
 This guarantees the canonical (anti)commutation relations by construction, so the resulting `M` is always a
 valid Bogoliubov transformation and is well-conditioned for the subsequent Bloch-Messiah decomposition.
 """
-function bogoliubov(H::Hermitian; tol=1e-8, zero_tol=1e-9)
+# `zero_tol` is the energy window below which a mode counts as a zero mode. Passing `:auto` (default)
+# determines it from the spectrum itself via `zero_mode_threshold` (see there): a fixed absolute tolerance
+# cannot be generic across problems, because the eigensolver only resolves a (near-)degenerate zero cluster
+# to ~1e-9·‖H‖, while genuine modes can in principle be small too. The adaptive rule places the cut inside
+# the spectral gap that separates the near-zero cluster from the bulk, and an odd count inside the window
+# trips the assertion below rather than silently corrupting the state.
+function bogoliubov(H::Hermitian; tol=1e-8)
     N = div(size(H, 1), 2)
 
     # Particle-hole conjugation C: [X_u; X_v] -> [conj(X_v); conj(X_u)]. C is the antiunitary
@@ -760,6 +795,7 @@ function bogoliubov(H::Hermitian; tol=1e-8, zero_tol=1e-9)
     _ph_conj(X) = vcat(conj.(X[N+1:end, :]), conj.(X[1:N, :]))
 
     E0, M0 = eigen(H)
+    zero_tol = zero_mode_threshold(E0)
 
     # Split the spectrum into strictly positive modes and exact zero modes (|E| <= zero_tol).
     pos_idx = findall(>(zero_tol), E0)
@@ -818,7 +854,7 @@ function _zero_mode_fermions(Z::AbstractMatrix, _ph_conj, n_pairs::Int; tol=1e-7
     # orthonormal to machine precision on others (Windows). Everything below assumes Z'Z = I (the
     # null space is exactly particle-hole invariant, so A is unitary only for orthonormal Z). A QR
     # orthonormalization preserves the span (Z stays in the null space) and makes the construction
-    # platform independent. Without it the PH-unitarity assertion below fails only on Linux.
+    # platform independent.
     Z = Matrix(qr(Z).Q)
     # Particle-hole operator restricted to the zero-mode subspace (in the Z basis): a vector
     # ω with coordinates w is Majorana (C-real) iff A * conj(w) = w. A is symmetric unitary,
@@ -837,11 +873,31 @@ function _zero_mode_fermions(Z::AbstractMatrix, _ph_conj, n_pairs::Int; tol=1e-7
     plus = findall(>(0), F.values) # eigenvalues are ±1; keep the C-real (+1) subspace
     @assert length(plus) == dim "Zero-mode real structure has wrong +1 multiplicity ($(length(plus)) vs $dim)."
     R = F.vectors[:, plus] # (2·dim) × dim, orthonormal real columns
+
+    # Order the Majoranas so that each fermion below pairs a "real-type" mode (top block of R dominant,
+    # giving a real B-column) with an "imaginary-type" mode (bottom block dominant, giving an i·real
+    # B-column). For a real Hamiltonian Tmat is block diagonal, so every +1 eigenvector is purely [v;0]
+    # or [0;w] and the two types come in equal number. Pairing one of each makes c† = (γ₁ + iγ₂)/√2 real,
+    # which keeps the Bogoliubov M — and hence every amplitude ⟨s|ψ⟩ — real (up to one global phase).
+    # The naive consecutive pairing instead mixes same-type Majoranas: the state stays physically real
+    # (Γ is real) but ⟨s|ψ⟩ picks up spurious per-configuration phases, which surface as a complex local
+    # energy once a (real) PEPS modulates the amplitudes and breaks the eigenstate cancellation.
+    top = vec(sum(abs2, @view(R[1:dim, :]); dims=1))
+    bot = vec(sum(abs2, @view(R[dim+1:end, :]); dims=1))
+    real_cols = [j for j in axes(R, 2) if top[j] >= bot[j]]
+    imag_cols = [j for j in axes(R, 2) if top[j] <  bot[j]]
+    order = Int[]
+    for k in 1:max(length(real_cols), length(imag_cols))
+        k <= length(real_cols) && push!(order, real_cols[k])
+        k <= length(imag_cols) && push!(order, imag_cols[k])
+    end
+    R = R[:, order]
     B = R[1:dim, :] .+ im .* R[dim+1:end, :] # orthonormal Majorana modes (columns, in Z basis)
 
     Zm = Z * B # Majorana zero modes in the original 2N-dimensional space
 
-    # Pair consecutive Majoranas into fermionic creation operators c† = (γ₁ + i γ₂)/√2.
+    # Pair consecutive Majoranas into fermionic creation operators c† = (γ₁ + i γ₂)/√2 (now real-type with
+    # imaginary-type, see above).
     X0 = Matrix{ComplexF64}(undef, size(Z, 1), n_pairs)
     for j in 1:n_pairs
         @views X0[:, j] .= (Zm[:, 2j-1] .+ im .* Zm[:, 2j]) ./ sqrt(2)
@@ -1090,8 +1146,12 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
     # undetermined and Vbar generically complex there. We identify the occupied columns (zero
     # Ubar column) and bring their Vbar sub-block to a real form via an SVD, absorbing the left
     # and right unitaries into D and C so that M = Dmat * UV_mat * Cmat stays invariant.
+    # Only needed when the occupied block is still complex. The zero-mode fermions are now built so that
+    # the whole decomposition is real for a real Hamiltonian (see `_zero_mode_fermions`), in which case
+    # this block is already real and the SVD re-gauge below — which also assumes a clean square block —
+    # must be skipped.
     occ = findall(j -> norm(@view Ubar[:, j]) < 1e-9, axes(Ubar, 2))
-    if !isempty(occ)
+    if !isempty(occ) && maximum(abs, imag(@view Vbar[:, occ])) > 1e-9
         row_support = findall(i -> norm(@view Vbar[i, occ]) > 1e-9, axes(Vbar, 1))
         @assert length(row_support) == length(occ) "Occupied Slater block is not square; cannot canonicalize."
         Vblk = Vbar[row_support, occ]
@@ -1130,11 +1190,16 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
     @assert U ≈ D*Ubar*C "Something went wrong with Bloch-Messiah decomposition for U"
     @assert V ≈ conj.(D)*Vbar*C "Something went wrong with Bloch-Messiah decomposition for V"
 
-    # remove numerical noise
-    @assert isapprox(Ubar, real.(Ubar); atol=1e-10) "Ubar should be real"
+    # remove numerical noise. Ubar and Vbar are real by construction; the residual imaginary parts are
+    # pure floating-point noise from the (complex) intermediate gauge rotations. We bound them with the
+    # max-entry (Inf) norm rather than `isapprox`, whose Frobenius norm grows with the matrix size and so
+    # spuriously fails the fixed 1e-10 tolerance for larger systems (e.g. the 4x4 lattice during
+    # optimization, where the per-entry noise ~1e-11 sums to >1e-10 over the 2N x 2N matrix).
+    real_tol = 1e-8
+    @assert maximum(abs, imag(Ubar)) < real_tol "Ubar should be real (max imaginary entry $(maximum(abs, imag(Ubar))))"
     Ubar = real(Ubar)
     Ubar[abs.(Ubar) .< 1e-12] .= 0.0
-    @assert isapprox(Vbar, real.(Vbar); atol=1e-10) "Vbar should be real"
+    @assert maximum(abs, imag(Vbar)) < real_tol "Vbar should be real (max imaginary entry $(maximum(abs, imag(Vbar))))"
     Vbar = real(Vbar)
     Vbar[abs.(Vbar) .< 1e-12] .= 0.0
 
