@@ -30,7 +30,7 @@ function build_history_callback()
     return callback, η_history
 end
 
-function build_H_BdG_mat(η, N)
+function _build_H_BdG_mat(η, N)
     t = η[1]
     Δ = η[2]
     μ = η[3]
@@ -42,7 +42,7 @@ function build_H_BdG_mat(η, N)
     return Hermitian(H)
 end
 
-H_BdG = build_H_BdG_mat(η_exact, N)
+H_BdG = _build_H_BdG_mat(η_exact, N)
 
 # get exact ground state energy for comparison
 eigenvalues = eigvals(H_BdG)
@@ -54,7 +54,7 @@ E_excited = E_exact + minimum(abs.(eigenvalues))
 # @show E_excited
 
 # determine parity of ground state
-GS = QuantumNaturalfPEPS.GaussianState(build_H_BdG_mat, N; η=η_exact)
+GS = QuantumNaturalfPEPS.GaussianState(_build_H_BdG_mat, N; η=η_exact)
 
 parity_sector = begin
     if GS.occ_ref == zeros(Int, N)
@@ -70,7 +70,7 @@ end
     η_init = deepcopy(η0)
 
     # Generate Operators for QNG
-    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks_Slater(H_BdG, build_H_BdG_mat, N; parity_sector=parity_sector, target_state=0)
+    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks_Slater(H_BdG, _build_H_BdG_mat, N; parity_sector=parity_sector, target_state=0)
 
     # Setup the Integrator and Solver
     integrator = QuantumNaturalGradient.Euler(lr=0.09)
@@ -91,7 +91,7 @@ end
     parity_hist = Vector{Int}(undef, size(η_history_mat, 2))
     for i in 1:size(η_history_mat, 2)
         η = vec(η_history_mat[:, i])
-        parity_hist[i] = QuantumNaturalfPEPS.getParity(QuantumNaturalfPEPS.GaussianState(build_H_BdG_mat, N; η=η, parity_sector=parity_sector, target_state=0))
+        parity_hist[i] = QuantumNaturalfPEPS.getParity(QuantumNaturalfPEPS.GaussianState(_build_H_BdG_mat, N; η=η, parity_sector=parity_sector, target_state=0))
     end
 
     # @show η0
@@ -112,7 +112,7 @@ end
     η_init = deepcopy(η0)
 
     # Generate Operators for QNG
-    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks_Slater(H_BdG, build_H_BdG_mat, N; parity_sector=parity_sector_1st_excited, target_state=0)
+    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks_Slater(H_BdG, _build_H_BdG_mat, N; parity_sector=parity_sector_1st_excited, target_state=0)
 
     # Setup the Integrator and Solver
     integrator = QuantumNaturalGradient.Euler(lr=0.05)
@@ -133,7 +133,7 @@ end
     parity_hist = Vector{Int}(undef, size(η_history_mat, 2))
     for i in 1:size(η_history_mat, 2)
         η = vec(η_history_mat[:, i])
-        parity_hist[i] = QuantumNaturalfPEPS.getParity(QuantumNaturalfPEPS.GaussianState(build_H_BdG_mat, N; η=η, parity_sector=parity_sector_1st_excited, target_state=0))
+        parity_hist[i] = QuantumNaturalfPEPS.getParity(QuantumNaturalfPEPS.GaussianState(_build_H_BdG_mat, N; η=η, parity_sector=parity_sector_1st_excited, target_state=0))
     end
 
     # @show η_exact

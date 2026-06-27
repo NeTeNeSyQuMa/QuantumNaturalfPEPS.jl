@@ -402,11 +402,11 @@ function write_Tensor!(peps, tensor, i, j)
     else
         tensor = ITensor(tensor, indices)
     end
-    if _is_fermionic_indices(indices)
-        peps[i,j] = permute(tensor, inds(peps[i,j]))
+
+    perm = NDTensors.getperm(inds(peps[i,j]), indices)
+    if perm == 1:length(indices) # if the orders already match
+        peps[i,j] = tensor # assign directly
     else
-        perm = NDTensors.getperm(inds(peps[i,j]), indices)
-        # TODO: Why do you permute the tensors here?
         peps[i,j] = ITensor(permutedims(tensor.tensor, perm))
     end
 end

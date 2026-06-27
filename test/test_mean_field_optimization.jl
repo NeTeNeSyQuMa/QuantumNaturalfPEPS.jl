@@ -7,63 +7,66 @@ using SkewLinearAlgebra
 
 Random.seed!(1234)
 
-N = 4
+@testset "(1D) Mean-field optimization test" begin
 
-η_exact_arr = [[1.0, 2.0, -0.2], [1.0, -2.0, 0.05], [-5.0, 4.0, 0.01]]
-η0_arr = [rand(3) for _ in 1:length(η_exact_arr)]
+    N = 4
 
-function build_H_BdG_mat(η, N)
-    t = η[1]
-    Δ = η[2]
-    μ = η[3]
+    η_exact_arr = [[1.0, 2.0, -0.2], [1.0, -2.0, 0.05], [-5.0, 4.0, 0.01], [1.0,1.0,0.0]]
+    η0_arr = [rand(3) for _ in 1:length(η_exact_arr)]
 
-    T = diagm(0 => fill(-μ, N), 1 => fill(-t, N-1), -1 => fill(-t, N-1))
-    D = diagm(1 => fill(Δ, N-1), -1 => fill(-Δ, N-1))
+    function build_H_BdG_mat(η, N)
+        t = η[1]
+        Δ = η[2]
+        μ = η[3]
 
-    H = [T D; D' -transpose(T)]
-    return Hermitian(H)
-end
+        T = diagm(0 => fill(-μ, N), 1 => fill(-t, N-1), -1 => fill(-t, N-1))
+        D = diagm(1 => fill(Δ, N-1), -1 => fill(-Δ, N-1))
 
-for (i,η_exact) in enumerate(η_exact_arr)
-    # @show η_exact
+        H = [T D; D' -transpose(T)]
+        return Hermitian(H)
+    end
 
-    η_exact ./= η_exact[1]
-    H_BdG = build_H_BdG_mat(η_exact, N)
+    for (i,η_exact) in enumerate(η_exact_arr)
+        # @show η_exact
 
-    η0 = η0_arr[i]
-    η_start = copy(η0)
+        η_exact ./= η_exact[1]
+        H_BdG = build_H_BdG_mat(η_exact, N)
 
-    # @show η0
+        η0 = η0_arr[i]
+        η_start = copy(η0)
 
-    # get exact ground state energy for comparison
-    eigenvalues = eigvals(H_BdG)
-    E_exact = real(sum(eigenvalues[eigenvalues .< 0]) / 2 + sum(diag(H_BdG[1:N, 1:N])) / 2)
-    # @show E_exact
+        # @show η0
 
-    # Generate Operators for QNG
-    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks_Slater(H_BdG, build_H_BdG_mat, N)
+        # get exact ground state energy for comparison
+        eigenvalues = eigvals(H_BdG)
+        E_exact = real(sum(eigenvalues[eigenvalues .< 0]) / 2 + sum(diag(H_BdG[1:N, 1:N])) / 2)
+        # @show E_exact
 
-    # Setup the Integrator and Solver
-    integrator = QuantumNaturalGradient.Euler(lr=0.08)
-    solver = QuantumNaturalGradient.EigenSolver()
+        # Generate Operators for QNG
+        Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks_Slater(H_BdG, build_H_BdG_mat, N)
 
-    # Evolve for a fixed (small) number of iterations as a demo
-    @time loss_value, trained_η, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, η0; 
-            integrator, 
-            verbosity=0,
-            solver,
-            sample_nr=100,
-            maxiter=500,
-    )
+        # Setup the Integrator and Solver
+        integrator = QuantumNaturalGradient.Euler(lr=0.08)
+        solver = QuantumNaturalGradient.EigenSolver()
 
-    # @show η_start
-    # @show η_exact
-    # @show trained_η ./ trained_η[1]
-    # @show E_exact
-    # @show loss_value
+        # Evolve for a fixed (small) number of iterations as a demo
+        @time loss_value, trained_η, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, η0; 
+                integrator, 
+                verbosity=0,
+                solver,
+                sample_nr=100,
+                maxiter=500,
+        )
 
-    @test isapprox(loss_value, E_exact; atol=1e-10)
-    @test all(isfinite, trained_η)
+        # @show η_start
+        # @show η_exact
+        # @show trained_η ./ trained_η[1]
+        # @show E_exact
+        # @show loss_value
 
-    @test isapprox((trained_η ./ trained_η[1]), η_exact ./ η_exact[1]; atol=1e-10)
+        @test isapprox(loss_value, E_exact; atol=1e-10)
+        @test all(isfinite, trained_η)
+
+        @test isapprox((trained_η ./ trained_η[1]), η_exact ./ η_exact[1]; atol=1e-10)
+    end;
 end;
