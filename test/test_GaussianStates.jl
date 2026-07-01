@@ -158,6 +158,37 @@ using QuantumNaturalfPEPS
                 end
             end
         end
+
+        @testset "Marginal probabilities at zero modes (sampling)" begin
+            # The joint sampler draws site-by-site from the Gaussian marginal `get_prob(GS, occ_dict)`, so
+            # its robustness rests on that marginal being (i) normalized and (ii) consistent with summing
+            # the full distribution over the unmeasured sites. We check both at parameter points with zero
+            # modes / degenerate spectra (t=Δ, μ=0) AND at a particle-number-conserving Slater point (Δ=0,
+            # all Bloch-Messiah blocks fully occupied/empty). Where `get_amplitude` is itself normalized
+            # (Δ≠0) we additionally cross-check it as an independent ground truth.
+            param_set = [(1.0, 1.0, 0.0), (1.0, 1.0, 1.0), (1.0, 0.0, 0.5), (2.0, 2.0, 0.0)]
+            N = 4
+            for ps in (0, 1), (t, Δ, μ) in param_set
+                GS = QuantumNaturalfPEPS.GaussianState(build_H_BdG_mat, N; η=[t, Δ, μ], parity_sector=ps, target_state=0)
+                # (i) the full Gaussian distribution normalizes to 1
+                p_full(occ) = QuantumNaturalfPEPS.get_prob(GS, occ)
+                @test isapprox(sum(p_full(digits(idx, base=2, pad=N)) for idx in 0:(2^N - 1)), 1.0; atol=1e-8)
+                for k in 1:(N - 1), pidx in 0:(2^k - 1)
+                    prefix = digits(pidx, base=2, pad=k)
+                    # (ii) the marginal of the first k sites equals summing the full distribution over the rest
+                    summed = sum(p_full(vcat(prefix, digits(s, base=2, pad=N - k))) for s in 0:(2^(N - k) - 1))
+                    marginal = QuantumNaturalfPEPS.get_prob(GS, Dict(i => prefix[i] for i in 1:k))
+                    @test isapprox(marginal, summed; atol=1e-8)
+                end
+                # independent ground truth where the amplitude is normalized (no fully occupied/empty blocks)
+                if Δ != 0
+                    for idx in 0:(2^N - 1)
+                        occ = digits(idx, base=2, pad=N)
+                        @test isapprox(p_full(occ), abs2(QuantumNaturalfPEPS.get_amplitude(GS, occ)); atol=1e-10)
+                    end
+                end
+            end
+        end
     end
 
     @testset "Gaussian states (complex MF parameters)" begin
@@ -318,6 +349,118 @@ using QuantumNaturalfPEPS
                     end
                 end
             end
+        end
+    end
+
+    @testset "Bloch-Messiah decomposition robustness" begin
+        # When the pairing matrix P carries no useful information within a degenerate
+        # subspace of Q (‖P_sub‖_∞ < 1e-10, i.e. an empty / fully occupied Slater block),
+        # the gauge is underdetermined. The decomposition must fall back to a stable
+        # default gauge (S_sub = I) instead of failing. We scan distinct phase-diagram
+        # points on a deterministic meshgrid of the mean-field parameters
+        # (μ, t, Δ ∈ [-2, 2]) for both 1D and 2D systems.
+
+        # Build a general 1D nearest-neighbour BdG Hamiltonian from the combined mean-field
+        # vector η = [μ_1..μ_L, t_1..t_{L-1}, Δ_1..Δ_{L-1}] on an open chain of L sites.
+        function build_H_BdG_1D(η::AbstractVector{<:Number}, L::Int)
+            @assert length(η) == 3L - 2 "η must have length 3L-2 = $(3L-2) for a 1D chain of L=$L sites"
+            μs = η[1:L]
+            ts = η[L+1 : 2L-1]
+            Δs = η[2L : 3L-2]
+            T = diagm(0 => -μs, 1 => -ts, -1 => -conj.(ts))
+            D = diagm(1 => Δs, -1 => -Δs)
+            H = [T D; D' -transpose(T)]
+            return Hermitian(Matrix(H))
+        end
+
+        # Build the combined mean-field vectors (scalar μ, t, Δ on every site / bond)
+        combined_η_1D(μ, t, Δ, L) = vcat(fill(float(μ), L), fill(float(t), L - 1), fill(float(Δ), L - 1))
+        function combined_η_2D(μ, t, Δ, Lx, Ly)
+            N = Lx * Ly
+            nhx = QuantumNaturalfPEPS.get_max_num_hopping_x_NN(Lx, Ly)
+            nhy = QuantumNaturalfPEPS.get_max_num_hopping_y_NN(Lx, Ly)
+            return vcat(fill(float(μ), N), fill(float(t), nhx), fill(float(t), nhy),
+                        fill(float(Δ), nhx), fill(float(Δ), nhy))
+        end
+
+        # Diagonalize H with the Bogoliubov transformation and feed the resulting M straight
+        # into the Bloch-Messiah decomposition, then verify M is faithfully reconstructed
+        # (the decomposition additionally asserts unitarity of its factors internally).
+        function check_bloch_messiah(H_BdG)
+            _, M = QuantumNaturalfPEPS.bogoliubov(H_BdG)
+            Dmat, UVmat, Cmat = QuantumNaturalfPEPS.bloch_messiah_decomposition(M)
+            return isapprox(M, Dmat * UVmat * Cmat; atol=1e-8)
+        end
+
+        # Sweep the (μ, t, Δ) meshgrid and report the number of failing points together
+        # with the first failing point for diagnostics.
+        function sweep_grid(build_H, μ_vals, t_vals, Δ_vals)
+            n_fail = 0
+            first_fail = nothing
+            for μ in μ_vals, t in t_vals, Δ in Δ_vals
+                ok = true
+                try
+                    ok = check_bloch_messiah(build_H(μ, t, Δ))
+                catch err
+                    ok = false
+                end
+                if !ok
+                    n_fail += 1
+                    first_fail === nothing && (first_fail = (μ = μ, t = t, Δ = Δ))
+                end
+            end
+            return n_fail, first_fail
+        end
+
+        #= 
+            TODO: Is the grid fine enough?
+        =#
+        μ_vals = range(-2.0, 2.0; length=9) # Coarse μ grid
+        t_vals = range(-2.0, 2.0; length=100)
+        Δ_vals = range(-2.0, 2.0; length=100)
+
+        @testset "1D systems ($(length(μ_vals)) × $(length(t_vals)) × $(length(Δ_vals)) meshgrid)" begin
+            L = 6
+            n_fail, first_fail = sweep_grid((μ, t, Δ) -> build_H_BdG_1D(combined_η_1D(μ, t, Δ, L), L), μ_vals, t_vals, Δ_vals)
+            if n_fail > 0
+                @show first_fail
+            end
+            @test n_fail == 0
+        end
+
+        @testset "2D systems ($(length(μ_vals)) × $(length(t_vals)) × $(length(Δ_vals)) meshgrid)" begin
+            Lx, Ly = 3, 2
+            n_fail, first_fail = sweep_grid((μ, t, Δ) -> QuantumNaturalfPEPS.build_general_H_BdG_2D_NN(combined_η_2D(μ, t, Δ, Lx, Ly), Lx, Ly), μ_vals, t_vals, Δ_vals)
+            if n_fail > 0
+                @show first_fail
+            end
+            @test n_fail == 0
+        end
+
+        #= NOTE: Whenever we encouter problematic points, we can add them here to cover these errors properly =#
+        @testset "manual edge cases (empty / fully occupied Slater blocks)" begin
+            L = 6
+            # Δ = 0 gives a pure hopping model: no pairing, so all degenerate Q blocks are
+            # empty / fully occupied and exercise the S_sub = I fallback branch.
+            @test check_bloch_messiah(build_H_BdG_1D(combined_η_1D(0.5, 1.0, 0.0, L), L))
+
+            # Uniform chain at half filling with a zero mode (t = Δ = 1, μ = 0).
+            @test check_bloch_messiah(build_H_BdG_1D(combined_η_1D(0.0, 1.0, 1.0, L), L))
+
+            # 2D square lattice (t =- 1, μ = 0, Δ = 0).
+            Lx, Ly = 4, 4
+            N = Lx * Ly
+            n_max_MF_params = QuantumNaturalfPEPS.get_max_num_MF_params_NN(Lx, Ly)
+            η = zeros(Float64, n_max_MF_params)
+            nx = QuantumNaturalfPEPS.get_max_num_hopping_x_NN(Lx, Ly)
+            ny = QuantumNaturalfPEPS.get_max_num_hopping_y_NN(Lx, Ly)
+            # hopping
+            hx_range = N+1 : N+nx
+            hy_range = N+nx+1 : N+nx+ny
+            t_mf = 1.0 # small mean-field hopping
+            η[hx_range] .= -t_mf
+            η[hy_range] .= -t_mf
+            @test check_bloch_messiah(QuantumNaturalfPEPS.build_general_H_BdG_2D_NN(η, Lx, Ly))
         end
     end
 end;
