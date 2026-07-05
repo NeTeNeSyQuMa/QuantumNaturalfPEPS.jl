@@ -133,3 +133,24 @@ function weighted_mean_error(O_loc, importance_weights)
 
     return μ, std_err, neff
 end
+
+"""
+    get_energy_summary(peps, ham, sample_nr=1000; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
+
+    Returns the mean energy, its statistical error, the variance of the energy, its statistical error and the effective sample number for a given PEPS and Hamiltonian.
+
+    # Keyword Arguments
+    - `peps::AbstractPEPS`: The PEPS for which the energy summary is calculated.
+    - `ham::AbstractOperator`: The Hamiltonian for which the energy summary is calculated.
+    - `sample_nr::Int`: The number of samples to be used for the calculation. Default is 1000.
+
+    # Optional Arguments
+    - `trial_state::AbstractTrialState`: The trial state used for within the optimization. Default is `IdentityState(dim(siteinds(peps)[1]))`.
+    - `kwargs...`: Additional keyword arguments to be passed to the `generate_Eks` function. This can include options like `threaded`, `multiproc`, etc.
+"""
+function get_energy_summary(peps, ham, sample_nr=1000; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
+    Eks_ = QuantumNaturalfPEPS.generate_Eks(peps, ham; trial_state=trial_state, kwargs...)
+    Es = QuantumNaturalGradient.EnergySummary(vec(peps), Eks_; sample_nr=sample_nr)
+
+    return mean(Es), QuantumNaturalGradient.energy_error(Es), var(Es), QuantumNaturalGradient.energy_var_error(Es), QuantumNaturalGradient.effective_sample_nr(Es)
+end

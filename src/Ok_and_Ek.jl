@@ -51,10 +51,11 @@ end
 Calculates the Energy of a given a peps and hamiltonian
 """
 function Ek(peps, ham_op; timer=TimerOutput(),
+            trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
             sampling_mode=:full,
             slow_energy=false, slow_energy_pos=(size(peps, 1)-1) ÷ 2)
 
-    S, logpc, env_top = @timeit timer "sampling" get_sample(peps; mode=sampling_mode, timer) # draw a sample
+    S, logpc, env_top = @timeit timer "sampling" get_sample(peps; trial_state=trial_state, mode=sampling_mode, timer) # draw a sample
 
     # If sampling_mode is full, we do not need to overwrite the the top environments as they are already computed accurately
     overwrite = !(sampling_mode == :full)
@@ -66,11 +67,13 @@ function Ek(peps, ham_op; timer=TimerOutput(),
         E_loc = convert_if_real(QuantumNaturalGradient.get_Ek(S, ham_op, func))
     else
         logψ, env_top, env_down, max_bond = @timeit timer "vertical_envs" get_logψ_and_envs(peps, S, env_top; overwrite) # compute the environments of the peps according to that sample
+        # add logψ from trial state such that we get the correct logψ_combined
+        logψ += log(get_amplitude(trial_state, collect(vec(S))))
 
         # initialize the flipped logψ dictionary, will be used to compute other observables or for the resampling
         logψ_flipped = Dict{Any, Number}() 
         Ek_terms = @timeit timer "precomp_sHψ_elems"  QuantumNaturalGradient.get_precomp_sOψ_elems(ham_op, S; get_flip_sites=true)
-        E_loc = @timeit timer "energy" get_Ek(peps, ham_op, env_top, env_down, S, logψ; logψ_flipped, Ek_terms, timer) # compute the local energy
+        E_loc = @timeit timer "energy" get_Ek(peps, ham_op, env_top, env_down, S, logψ; trial_state=trial_state, logψ_flipped, Ek_terms, timer) # compute the local energy
     end
     return E_loc, logψ, S, logpc, max_bond
 end
