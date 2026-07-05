@@ -101,10 +101,10 @@ function hamiltonian_hubbard(t, U, Lx, Ly)
 end
 
 # total number operator
-function build_Ntot_op(L::Int)
+function build_Ntot_op(Lx::Int, Ly::Int)
     Ntot_op = ITensors.OpSum()
 
-    for i in 1:L, j in 1:L
+    for i in 1:Lx, j in 1:Ly
         Ntot_op .+= (1.0, "N", (i, j))
     end
 
@@ -112,12 +112,12 @@ function build_Ntot_op(L::Int)
 end
 
 # CDW order parameter M^2 = (1/N^2) sum_{a,b} (-1)^(x_a+y_a+x_b+y_b) n_a n_b
-function build_M_cdw2_op(L::Int)
+function build_M_cdw2_op(Lx::Int, Ly::Int)
     M2_op = ITensors.OpSum()
 
     sites = Tuple{Int,Int,Float64}[]
 
-    for i in 1:L, j in 1:L
+    for i in 1:Lx, j in 1:Ly
         push!(sites, (i, j, float((-1)^(i + j))))
     end
 
@@ -137,17 +137,17 @@ function build_M_cdw2_op(L::Int)
 end
 
 # average nearest-neighbor density-density correlation (1/Nb) sum_{<a,b>} n_a n_b
-function build_nn_dd_corr_op(L::Int)
+function build_nn_dd_corr_op(Lx::Int, Ly::Int)
     nn_op = ITensors.OpSum()
-    Nb = 2L * (L - 1)
+    Nb = Lx * (Ly - 1) + Ly * (Lx - 1)
     coeff = 1.0 / Nb
 
-    for i in 1:L, j in 1:L
-        if j < L
+    for i in 1:Lx, j in 1:Ly
+        if j < Ly
             nn_op .+= (coeff, "N", (i, j), "N", (i, j+1))
         end
 
-        if i < L
+        if i < Lx
             nn_op .+= (coeff, "N", (i, j), "N", (i+1, j))
         end
     end

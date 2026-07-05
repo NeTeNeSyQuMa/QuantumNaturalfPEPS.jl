@@ -1,7 +1,10 @@
 abstract type AbstractTrialState end
 
+# Defaults to Bool for IdentityState so it is neutral under `promote_type` (i.e. a real-amplitude trial state never widens the PEPS eltype).
+Base.eltype(::AbstractTrialState) = Bool
+
 # Default Trial state is just the identity, which does not change the PEPS optimization
-struct IdentityState <: AbstractTrialState 
+struct IdentityState <: AbstractTrialState
     phys_dim::Int
 end
 write!(Id::IdentityState, x) = nothing # writing to the identity state does nothing
