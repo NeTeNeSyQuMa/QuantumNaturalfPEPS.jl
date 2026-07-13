@@ -14,11 +14,23 @@ end
 
 function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
                               threaded=false, multiproc=false, shared_array=true, async_double_layers=false, verbose=false,
-                              fix_trial_state=false,
+                              fix_trial_state=false, fix_peps=false,
                               kwargs...)
+    if fix_peps && fix_trial_state
+        error("fix_peps=true and fix_trial_state=true leaves nothing to optimize")
+    end
+
     if fix_trial_state
         # freeze the trial state: Θ then only contains the PEPS parameters and only those are updated
         trial_state = FrozenTrialState(trial_state)
+    end
+
+    if fix_peps
+        # freeze the PEPS: with an all-zero mask it still contributes its amplitudes but exposes no
+        # variational parameters (length(peps) == 0, write! and get_Ok skip every tensor), so Θ then
+        # only contains the trial-state parameters. Work on a copy so the caller's PEPS keeps its mask.
+        peps = deepcopy(peps)
+        peps.mask = zeros(size(peps.mask))
     end
 
     local double_layer_update, stop_thread
@@ -110,7 +122,10 @@ function generate_Oks_and_Eks_singlethread(peps::AbstractPEPS, ham_op::TensorOpe
 end
 
 # this function returns a Ok_and_Eks function for the trial_state only wich can be used to optimise via QNG.evolve
-function generate_Oks_and_Eks_singlethread(H_BdG_exact::Hermitian, H_BdG_func::Function, N::Int; trial_state_type::Type{<:AbstractTrialState}=GaussianState, kwargs...)
+function generate_Oks_and_Eks_singlethread(H_BdG_exact::Hermitian, H_BdG_func::Function, N::Int;
+                                           trial_state_type::Type{<:AbstractTrialState}=GaussianState,
+                                           parity_sector::Int=0, target_state::Int=0,
+                                           timer=TimerOutput(), kwargs...)
     @assert parity_sector == 0 || parity_sector == 1 "Parity sector must be either 0 (even) or 1 (odd)"
 
     if trial_state_type == GaussianState
@@ -119,8 +134,8 @@ function generate_Oks_and_Eks_singlethread(H_BdG_exact::Hermitian, H_BdG_func::F
                 kwargs = merge(kwargs, kwargs2)
             end
             # create the trial state from η
-            GS = GaussianState(H_BdG_func, N; η=η, kwargs...)
-            return @timeit timer "Oks_and_Eks" Oks_and_Eks_singlethread_Slater(GS, H_BdG_exact, sample_nr; timer=timer, kwargs2...)
+            GS = GaussianState(H_BdG_func, N; η=η, parity_sector=parity_sector, target_state=target_state)
+            return @timeit timer "Oks_and_Eks" Oks_and_Eks_singlethread_Slater(GS, H_BdG_exact, sample_nr; timer=timer, kwargs...)
         end
         return Oks_and_Eks_
     end
@@ -173,7 +188,7 @@ function Oks_and_Eks_singlethread_Slater(GS::GaussianState, H_BdG_exact::Hermiti
 
     for i in 1:sample_nr
         Ok_view = @view Oks[:, i]
-        _, Eks[i], logψs[i], samples[i], logpc[i], contract_dims[i] = Ok_and_Ek_Slater(GS, H_BdG_exact; timer, Ok=Ok_view, amp_cache, SlaterConnections, kwargs...)
+        _, Eks[i], logψs[i], samples[i], logpc[i], contract_dims[i] = Ok_and_Ek(GS, H_BdG_exact; timer, Ok=Ok_view, amp_cache, SlaterConnections, kwargs...)
     end
     
     #return Ok, E_loc, logψ, samples, compute_importance_weights(logψ, logpc)
