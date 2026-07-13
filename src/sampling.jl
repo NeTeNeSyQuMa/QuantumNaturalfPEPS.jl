@@ -218,3 +218,50 @@ function get_sample(peps::AbstractPEPS; mode::Symbol=:full, alg="densitymatrix",
     
     return S, logpc, env_top
 end
+
+#= 
+    Trial state variants
+=#
+
+
+# samples from ρ_r and updates pc
+function sample_ρr(GS::GaussianState, S, r, c, M_cache::OccupationProjectorCache)
+    n_measured = (r - 1) * size(S, 2) + c
+    site_idx = (c - 1) * size(S, 1) + r # true column-major linear index
+
+    # flip the occupation of the current site to compute the probabilities for both configurations
+    set_occ_projector_block!(M_cache.M_j, site_idx, 0)
+    p0 = get_prob!(GS, M_cache, n_measured)
+    set_occ_projector_block!(M_cache.M_j, site_idx, 1)
+    p1 = get_prob!(GS, M_cache, n_measured)
+
+    p_final = [p0, p1]
+
+    i = sample_p(p_final, normalize=true)
+
+    # update occ projector for drawn occupation
+    set_occ_projector_block!(M_cache.M_j, site_idx, i-1)
+
+    return i-1, p_final[i]
+end
+
+# generates a sample of a given peps along with pc and the top environments
+function get_sample(GS::GaussianState; timer=TimerOutput())
+    L = Int(sqrt(GS.N)) # TODO: this only works for square lattices, we should make this more general
+
+    S = Array{Int64}(undef, L, L)
+    M_cache = OccupationProjectorCache(GS.N)
+    
+    logpc = 0
+    # we loop through every row
+    for i in 1:L
+        # then we loop through the different sites in one row
+        for j in 1:L
+            # sample from Slater wave function
+            S[i, j], pc = sample_ρr(GS, S, i, j, M_cache)
+            logpc += log(pc)
+        end
+    end
+    
+    return S, logpc
+end

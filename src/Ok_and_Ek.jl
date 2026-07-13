@@ -77,3 +77,30 @@ function Ek(peps, ham_op; timer=TimerOutput(),
     end
     return E_loc, logψ, S, logpc, max_bond
 end
+
+#= 
+    Trial state variants
+=#
+
+# Calculates the Energy and Gradient of a given peps and hamiltonian
+function Ok_and_Ek(GS::GaussianState, H_BdG_exact::Hermitian; timer=TimerOutput(), Ok=nothing, sampling_mode=:full,
+                   resample=false, correct_sampling_error=true, resample_energy=0, # TODO: remove
+                   amp_cache=nothing, SlaterConnections=nothing,
+                   )
+    
+    S, logpc = @timeit timer "sampling" get_sample(GS; timer) # draw a sample
+    occ_string = collect(vec(S')) # julia vec(matrix) is column major, whereas we use row major in the sampling logic
+
+    if amp_cache === nothing
+        amp_cache = @timeit timer "amp_cache" build_amplitude_cache(GS)
+    end
+    
+    # initialize the flipped logψ dictionary, will be used to compute other observables or for the resampling
+    # Ek_terms = @timeit timer "precomp_sHψ_elems"  QuantumNaturalGradient.get_precomp_sOψ_elems(ham_op, S; get_flip_sites=true)
+    E_loc = @timeit timer "energy" get_Ek_Slater(GS, H_BdG_exact, S; timer, amp_cache=amp_cache, SlaterConnections=SlaterConnections) # compute the local energy
+    grad = @timeit timer "log_gradients" get_Ok(GS, S, Ok) # compute the gradient
+
+    logψ = log(get_amplitude(amp_cache, occ_string))
+    max_bond = 2 # dummy
+    return grad, E_loc, logψ, S, logpc, max_bond
+end

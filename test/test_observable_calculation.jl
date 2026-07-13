@@ -2,6 +2,7 @@ using Test
 using ITensors
 using QuantumNaturalfPEPS
 using QuantumNaturalGradient
+using LinearAlgebra
 using Random
 
 Random.seed!(1234)
@@ -184,4 +185,104 @@ Random.seed!(1234)
         @test 0.375 - M2_error <= M2_mean / N <= 0.625 + M2_error
         @test 0.178 - nn_avg_error < nn_avg_mean < 0.218 + nn_avg_error
     end
+
+    # =====================================================================================
+    # Fixed trial state tests: first optimize the trial state alone until convergence
+    # (trial-state-only Oks_and_Eks, no PEPS), then freeze it via fix_trial_state=true and
+    # optimize only a D=1 PEPS on the full Hubbard Hamiltonian.
+    # =====================================================================================
+
+    function optimize_trial_state(H_BdG_exact, η0; maxiter=500, lr=0.05, sample_nr=Nsamples)
+        Oks_and_Eks_slater = QuantumNaturalfPEPS.generate_Oks_and_Eks(H_BdG_exact, QuantumNaturalfPEPS.build_general_H_BdG_2D_NN, N;
+                                                                      parity_sector=parity_sector, target_state=target_state)
+        integrator = QuantumNaturalGradient.Euler(lr=lr)
+        solver = QuantumNaturalGradient.EigenSolver()
+        loss_value, trained_η, misc = QuantumNaturalGradient.evolve(Oks_and_Eks_slater, η0;
+                integrator,
+                verbosity=0,
+                solver,
+                sample_nr,
+                maxiter,
+        )
+        return loss_value, trained_η
+    end
+
+    # exact ground state energy of the quadratic surrogate Hamiltonian
+    function exact_quadratic_energy(H_BdG_exact)
+        eigenvalues = eigvals(H_BdG_exact)
+        return real(sum(eigenvalues[eigenvalues .< 0]) / 2 + sum(diag(H_BdG_exact[1:N, 1:N])) / 2)
+    end
+
+    function optimize_fixed_trial_state_peps(Hubbard_ham, trained_η; maxiter=maxiters)
+        trial_state = QuantumNaturalfPEPS.GaussianState(QuantumNaturalfPEPS.build_general_H_BdG_2D_NN, N;
+                                                        η=trained_η, parity_sector=parity_sector, target_state=target_state)
+        hilbert = ITensors.siteinds("Fermion", Lx, Ly)
+        peps = PEPS(hilbert; bond_dim=1, tensor_init=constant_peps_tensor)
+
+        θ = vec(QuantumNaturalGradient.Parameters(peps).obj) # only PEPS parameters, the trial state is fixed
+
+        integrator = QuantumNaturalGradient.Euler(lr=0.05)
+        Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(peps, Hubbard_ham; trial_state=trial_state, fix_trial_state=true)
+
+        loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ;
+                integrator,
+                verbosity=0,
+                sample_nr=Nsamples,
+                maxiter,
+        )
+        return loss_value, trained_θ, length(θ)
+    end
+
+    # @testset "Fixed trial state: no-hopping limit with t=0.0 and U=2.0" begin
+    #     Hubbard_ham = QuantumNaturalfPEPS.hamiltonian_hubbard(0.0, 2.0, Lx, Ly)
+
+    #     n_max_MF_params = QuantumNaturalfPEPS.get_max_num_MF_params_NN(Lx, Ly)
+    #     nx = QuantumNaturalfPEPS.get_max_num_hopping_x_NN(Lx, Ly)
+    #     ny = QuantumNaturalfPEPS.get_max_num_hopping_y_NN(Lx, Ly)
+
+    #     # quadratic surrogate with the same (CDW) ground state: staggered onsite potential only
+    #     η_cdw = zeros(Float64, n_max_MF_params)
+    #     for y in 1:Ly, x in 1:Lx
+    #         idx = QuantumNaturalfPEPS.col_major_site(x, y, Lx)
+    #         η_cdw[idx] = -1.0 * (-1)^(x + y)
+    #     end
+    #     H_BdG_exact = QuantumNaturalfPEPS.build_general_H_BdG_2D_NN(η_cdw, N)
+
+    #     # start away from the ground state with a small hopping admixture
+    #     η0 = copy(η_cdw)
+    #     η0[N+1 : N+nx+ny] .= -0.05
+
+    #     loss_slater, trained_η = optimize_trial_state(H_BdG_exact, η0)
+    #     @test isapprox(loss_slater, exact_quadratic_energy(H_BdG_exact); atol=1e-8)
+
+    #     # freeze the converged trial state and optimize only the D=1 PEPS on the Hubbard Hamiltonian
+    #     loss_value, trained_θ, n_θ = optimize_fixed_trial_state_peps(Hubbard_ham, trained_η)
+    #     @test length(trained_θ) == n_θ # variational vector contains only the PEPS parameters
+    #     @test isapprox(loss_value, -24.0; atol=1e-8)
+    # end
+
+    # @testset "Fixed trial state: no onsite-potential limit with t=1.0 and U=0.0" begin
+    #     Hubbard_ham = QuantumNaturalfPEPS.hamiltonian_hubbard(1.0, 0.0, Lx, Ly)
+
+    #     n_max_MF_params = QuantumNaturalfPEPS.get_max_num_MF_params_NN(Lx, Ly)
+    #     nx = QuantumNaturalfPEPS.get_max_num_hopping_x_NN(Lx, Ly)
+    #     ny = QuantumNaturalfPEPS.get_max_num_hopping_y_NN(Lx, Ly)
+
+    #     # the free hopping Hamiltonian is itself quadratic and exactly representable
+    #     η_ff = zeros(Float64, n_max_MF_params)
+    #     η_ff[N+1 : N+nx+ny] .= -1.0
+    #     H_BdG_exact = QuantumNaturalfPEPS.build_general_H_BdG_2D_NN(η_ff, N)
+
+    #     # ponytail: start at the mean-field solution (exact for U=0). A perturbed start converges only
+    #     # very slowly here because of the degenerate zero modes at half filling; genuine Slater
+    #     # optimization is already covered by test_mean_field_optimization.jl and
+    #     # test_fixed_parity_optimization.jl — this test validates the fixed-trial-state pipeline.
+    #     loss_slater, trained_η = optimize_trial_state(H_BdG_exact, copy(η_ff); maxiter=20)
+    #     @test isapprox(loss_slater, exact_quadratic_energy(H_BdG_exact); atol=1e-8)
+
+    #     # freeze the converged trial state and optimize only the D=1 PEPS on the Hubbard Hamiltonian
+    #     loss_value, trained_θ, n_θ = optimize_fixed_trial_state_peps(Hubbard_ham, trained_η)
+    #     @test length(trained_θ) == n_θ # variational vector contains only the PEPS parameters
+    #     @test isapprox(loss_value, -2 - 4*sqrt(5); atol=1e-8)
+    # end
 end;

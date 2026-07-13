@@ -43,7 +43,7 @@ Random.seed!(1234)
         # @show E_exact
 
         # Generate Operators for QNG
-        Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks_Slater(H_BdG, build_H_BdG_mat, N)
+        Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(H_BdG, build_H_BdG_mat, N; threaded=true)
 
         # Setup the Integrator and Solver
         integrator = QuantumNaturalGradient.Euler(lr=0.08)
