@@ -3,6 +3,7 @@ function generate_Oks_and_Eks_multiproc_sharedarrays(peps::AbstractPEPS, ham_op:
                                                      reset_double_layer=true,
                                                      kwargs...)
     n_threads = Distributed.remotecall_fetch(()->Threads.nthreads(), workers()[1])
+    # this function will be called when QuantumNaturalGradient.evolve is passed θ = convert(Vector, peps)
     function Oks_and_Eks_(Θ::Vector{T}, sample_nr::Integer; kwargs2...) where T
         if length(kwargs2) > 0
             kwargs = merge(kwargs, kwargs2)
@@ -13,10 +14,10 @@ function generate_Oks_and_Eks_multiproc_sharedarrays(peps::AbstractPEPS, ham_op:
             @timeit timer "double_layer_envs" double_layer_update(peps) # update the double layer environments once for the peps
         end
 
-        return @timeit timer "Oks_and_Eks" Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr;
+        return @timeit timer "sampling" Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr;
                                                                timer=timer, n_threads=n_threads, kwargs...)
     end
-
+    # this function will be called when QuantumNaturalGradient.evolve is passed θ = QuantumNaturalGradient.Parameters(peps)
     function Oks_and_Eks_(peps_::Parameters{<:AbstractPEPS}, sample_nr::Integer; kwargs2...)
 
         peps_ = peps_.obj
@@ -27,7 +28,7 @@ function generate_Oks_and_Eks_multiproc_sharedarrays(peps::AbstractPEPS, ham_op:
         if length(kwargs2) > 0
             kwargs = merge(kwargs, kwargs2)
         end
-        return @timeit timer "Oks_and_Eks" Oks_and_Eks_multiproc_sharedarrays(peps_, ham_op, sample_nr;
+        return @timeit timer "sampling" Oks_and_Eks_multiproc_sharedarrays(peps_, ham_op, sample_nr;
                                                                timer=timer, n_threads=n_threads, kwargs...)
     end
     return Oks_and_Eks_
@@ -76,7 +77,7 @@ function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; Oks=nothing
     logpcs = Vector{eltype_real}(undef, sample_nr_eff)
     contract_dims = Vector{Int}(undef, sample_nr_eff)
 
-    @timeit timer "recieve results" for (i, task) in enumerate(out)
+    @timeit timer "receive results" for (i, task) in enumerate(out)
         i1 = k_eff * (i - 1) + 1
         i2 = k_eff * i
         out_dict = fetch(task)
