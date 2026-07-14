@@ -12,11 +12,17 @@ function get_ExpectationValue(peps::AbstractPEPS, O; it=100, threaded=false, mul
             O_op[i] = TensorOperatorSum(O[i], hilbert)
         end
     end
+
+    # force the existence of double layer envs BEFORE multithreading to avoid race condition.
+    if getfield(peps, :double_layer_envs) === nothing
+        update_double_layer_envs!(peps_)
+    end
+
     if multiproc
-        #get_ExpectationValues_singlethread(peps, [O_op[1]]; it=1)
+        #get_ExpectationValues_singlethread(peps, [O_op[1]]; it=1) # for precompilation
         return get_ExpectationValues_multiproc(peps, O_op; it)
     elseif threaded
-        get_ExpectationValues_singlethread(peps, [O_op[1]]; it=1)
+        get_ExpectationValues_singlethread(peps, [O_op[1]]; it=1)  # for precompilation
         return get_ExpectationValues_multithread(peps, O_op; it)
     else
         return get_ExpectationValues_singlethread(peps, O_op; it)
