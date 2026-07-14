@@ -122,7 +122,7 @@ function get_4body_term(peps::AbstractPEPS, env_top::Vector{Environment}, env_do
     end
 
     c = (con_right*con_left)[]
-    if isreal(c) && c < 0
+    if c isa Real && c < 0
         c = complex(c)
     end
     logψ_flipped = log(c) + f
@@ -178,7 +178,7 @@ function get_term(peps::AbstractPEPS, env_top::Vector{Environment}, env_down::Ve
         flip = flip * h_envs_r[maxy]
     end
     c = contract(flip)[]
-    if isreal(c) && c < 0
+    if c isa Real && c < 0
         c = complex(c)
     end
     logψ_flipped = log(c) + f
@@ -237,7 +237,7 @@ function get_longerHor_term(peps::AbstractPEPS, env_top::Vector{Environment}, en
         flip = flip * h_envs_r[maxy]
     end
     c = contract(flip)[]
-    if isreal(c) && c < 0
+    if c isa Real && c < 0
         c = complex(c)
     end
     logψ_flipped = log(c) + f
@@ -300,7 +300,7 @@ function get_logψ_flipped(peps::AbstractPEPS, Ek_terms, env_top::Vector{Environ
     end
 
     if !isempty(other)
-        @warn "Only nearest and next nearest neighbour interactions are efficiently supported. Note that if the opertor is in he computational basis, any interaction length is possible."
+        @warn "Only nearest and next nearest neighbour interactions are efficiently supported. Note that if the opertor is in the computational basis, any interaction length is possible."
         for flip_term in other
             if !haskey(logψ_flipped, flip_term)
                 sample_flipped = copy(sample)
