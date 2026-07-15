@@ -29,7 +29,7 @@ function generate_Oks_and_Eks_multiproc(peps::AbstractPEPS, ham_op::TensorOperat
     return Oks_and_Eks_
 end
 
-function Oks_and_Eks_multiproc(peps, ham_op, sample_nr; trial_state = trial_state, Oks=nothing, importance_weights=true, 
+function Oks_and_Eks_multiproc(peps, ham_op, sample_nr; trial_state = IdentityState(dim(siteinds(peps)[1])), Oks=nothing, importance_weights=true, 
                                n_threads=Distributed.remotecall_fetch(()->Threads.nthreads(), workers()[1]),
                                timer=TimerOutput(),
                                kwargs...)
