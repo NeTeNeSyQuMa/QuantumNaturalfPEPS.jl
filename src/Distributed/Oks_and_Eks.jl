@@ -12,6 +12,7 @@ function generate_Oks_and_Eks(peps::AbstractPEPS, ham::OpSum; kwargs...)
 end
 
 function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum;
+                              trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
                               threaded=false, multiproc=false, shared_array=true, async_double_layers=false, verbose=false,
                               fix_trial_state=false, fix_peps=false,
                               kwargs...)
@@ -43,14 +44,14 @@ function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum;
     
     if multiproc
         if shared_array
-            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc_sharedarrays(peps, ham_op; threaded, double_layer_update, kwargs...)
+            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc_sharedarrays(peps, ham_op; threaded, double_layer_update, trial_state=trial_state, kwargs...)
         else
-            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc(peps, ham_op; threaded, double_layer_update, kwargs...)
+            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc(peps, ham_op; threaded, double_layer_update, trial_state=trial_state, kwargs...)
         end
     elseif threaded
-        Oks_and_Eks_func = generate_Oks_and_Eks_threaded(peps, ham_op; double_layer_update, kwargs...)
+        Oks_and_Eks_func = generate_Oks_and_Eks_threaded(peps, ham_op; double_layer_update, trial_state=trial_state, kwargs...)
     else
-        Oks_and_Eks_func = generate_Oks_and_Eks_singlethread(peps, ham_op; double_layer_update, kwargs...)
+        Oks_and_Eks_func = generate_Oks_and_Eks_singlethread(peps, ham_op; double_layer_update, trial_state=trial_state, kwargs...)
     end
 
     if async_double_layers
