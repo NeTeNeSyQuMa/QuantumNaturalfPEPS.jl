@@ -1,4 +1,3 @@
-
 function compute_importance_weights(logψs, logpcs)
     log_ratios =  2 .* real.(logψs) .- logpcs
     logZ = logsumexp(log_ratios) - log(length(logpcs))
@@ -12,7 +11,7 @@ function generate_Oks_and_Eks(peps::AbstractPEPS, ham::OpSum; kwargs...)
     return generate_Oks_and_Eks(peps, ham_op; kwargs...)
 end
 
-function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
+function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum;
                               threaded=false, multiproc=false, shared_array=true, async_double_layers=false, verbose=false,
                               kwargs...)
     
@@ -27,14 +26,14 @@ function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum; tri
     
     if multiproc
         if shared_array
-            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc_sharedarrays(peps, ham_op; trial_state=trial_state, threaded, double_layer_update, kwargs...)
+            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc_sharedarrays(peps, ham_op; threaded, double_layer_update, kwargs...)
         else
-            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc(peps, ham_op; trial_state=trial_state, threaded, double_layer_update, kwargs...)
+            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc(peps, ham_op; threaded, double_layer_update, kwargs...)
         end
     elseif threaded
-        Oks_and_Eks_func = generate_Oks_and_Eks_threaded(peps, ham_op; trial_state=trial_state, double_layer_update, kwargs...)
+        Oks_and_Eks_func = generate_Oks_and_Eks_threaded(peps, ham_op; double_layer_update, kwargs...)
     else
-        Oks_and_Eks_func = generate_Oks_and_Eks_singlethread(peps, ham_op; trial_state=trial_state, double_layer_update, kwargs...)
+        Oks_and_Eks_func = generate_Oks_and_Eks_singlethread(peps, ham_op; double_layer_update, kwargs...)
     end
 
     if async_double_layers
