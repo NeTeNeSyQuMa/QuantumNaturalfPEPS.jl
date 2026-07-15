@@ -152,5 +152,5 @@ function get_energy_summary(peps, ham, sample_nr=1000; trial_state::AbstractTria
     Eks_ = QuantumNaturalfPEPS.generate_Eks(peps, ham; trial_state=trial_state, kwargs...)
     Es = QuantumNaturalGradient.EnergySummary(vec(peps), Eks_; sample_nr=sample_nr)
 
-    return mean(Es), QuantumNaturalGradient.energy_error(Es), var(Es), QuantumNaturalGradient.energy_var_error(Es), QuantumNaturalGradient.effective_sample_nr(Es)
+    return Es.mean, QuantumNaturalGradient.energy_error(Es), Es.var, QuantumNaturalGradient.energy_var_error(Es), QuantumNaturalGradient.weight_effective_sample_nr(Es)
 end
