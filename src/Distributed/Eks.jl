@@ -181,7 +181,7 @@ function generate_Eks_multiproc(peps::AbstractPEPS, ham_op::TensorOperatorSum; t
     return Eks_
 end
 
-function Eks_multiproc(peps, ham_op, sample_nr; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
+function Eks_multiproc(peps, ham_op, sample_nr;
                        importance_weights=true,
                        n_threads=Distributed.remotecall_fetch(() -> Threads.nthreads(), workers()[1]),
                        timer=TimerOutput(), kwargs...)
