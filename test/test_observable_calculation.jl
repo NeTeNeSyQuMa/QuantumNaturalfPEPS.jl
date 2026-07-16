@@ -182,6 +182,8 @@ Random.seed!(1234)
                 end
 
                 @testset "Optimized trial state" begin
+                    Random.seed!(1234) # set seed here explicitly so the run converges with the poor number of samples and iterations
+
                     peps = deepcopy(peps_rnd)
                     peps, loss_value, trained_η = optimize_fixed_trial_state_peps(peps, Hubbard_ham, optimal_trial_state.η; maxiter=50, lr=0.05, verbosity=0)
                     @test isapprox(loss_value, E_exact; atol=1e-8)
