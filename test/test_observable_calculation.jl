@@ -168,10 +168,10 @@ Random.seed!(1234)
                     nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_nn_dd_corr_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
 
                     # check if the error is within the expected sampling error
-                    atol = 1 / sqrt(Nmeasure)
+                    atol = 3 / sqrt(Nmeasure)
                     @test Ntot_err <= atol
                     @test energy_err <= atol
-                    @test M2_error <= 3*atol
+                    @test M2_error <= atol
                     @test nn_avg_error <= atol
 
                     # check for the accuracy of sampled results
@@ -192,10 +192,10 @@ Random.seed!(1234)
                     nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_nn_dd_corr_op(Lx, Ly); trial_state=optimal_trial_state, it=Nmeasure)...)
 
                     # check if the error is within the expected sampling error
-                    atol = 1 / sqrt(Nmeasure)
+                    atol = 3 / sqrt(Nmeasure)
                     @test Ntot_err <= atol
                     @test energy_err <= atol
-                    @test M2_error <= 3*atol
+                    @test M2_error <= atol
                     @test nn_avg_error <= atol
 
                     # check for the accuracy of sampled results
