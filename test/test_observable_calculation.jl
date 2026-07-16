@@ -122,7 +122,7 @@ Random.seed!(1234)
 
     Nsamples = 200
     maxiters = 10
-    Nmeasure = 1000
+    Nmeasure = 1500
 
     @testset "Test no-hopping limit with t=0.0 and U=2.0" begin
         t = 0.0
@@ -157,29 +157,29 @@ Random.seed!(1234)
         @testset "Joint optimization" begin
             @testset "Optimize trial state first (fixed) then PEPS" begin
 
-                # @testset "Guessed trial state" begin # CDW ansatz
-                #     peps = deepcopy(peps_rnd)
-                #     peps, loss_value, trained_η = optimize_fixed_trial_state_peps(peps, Hubbard_ham, trial_state.η; maxiter=50, lr=0.05, verbosity=0)
-                #     @test isapprox(loss_value, E_exact; atol=1e-8)
+                @testset "Guessed trial state" begin # CDW ansatz
+                    peps = deepcopy(peps_rnd)
+                    peps, loss_value, trained_η = optimize_fixed_trial_state_peps(peps, Hubbard_ham, trial_state.η; maxiter=50, lr=0.05, verbosity=0)
+                    @test isapprox(loss_value, E_exact; atol=1e-8)
 
-                #     energy , energy_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, Hubbard_ham; trial_state=trial_state, it=Nmeasure)...)
-                #     Ntot_mean , Ntot_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_Ntot_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
-                #     M2_mean , M2_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_M_cdw2_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
-                #     nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_nn_dd_corr_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
+                    energy , energy_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, Hubbard_ham; trial_state=trial_state, it=Nmeasure)...)
+                    Ntot_mean , Ntot_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_Ntot_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
+                    M2_mean , M2_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_M_cdw2_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
+                    nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_nn_dd_corr_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
 
-                #     # check if the error is within the expected sampling error
-                #     atol = 3 / sqrt(Nmeasure)
-                #     @test Ntot_err <= atol
-                #     @test energy_err <= atol
-                #     @test M2_error <= atol
-                #     @test nn_avg_error <= atol
+                    # check if the error is within the expected sampling error
+                    atol = 3 / sqrt(Nmeasure)
+                    @test Ntot_err <= atol
+                    @test energy_err <= atol
+                    @test M2_error <= atol
+                    @test nn_avg_error <= atol
 
-                #     # check for the accuracy of sampled results
-                #     @test isapprox(Ntot_mean, 8.0; atol=atol)
-                #     @test isapprox(energy, E_exact; atol=atol)
-                #     @test isapprox(M2_mean/N, 4.0; atol=atol)
-                #     @test isapprox(nn_avg_mean, 0.0; atol=atol)
-                # end
+                    # check for the accuracy of sampled results
+                    @test isapprox(Ntot_mean, 8.0; atol=atol)
+                    @test isapprox(energy, E_exact; atol=atol)
+                    @test isapprox(M2_mean/N, 4.0; atol=atol)
+                    @test isapprox(nn_avg_mean, 0.0; atol=atol)
+                end
 
                 @testset "Optimized trial state" begin
                     Random.seed!(1234) # set seed here explicitly so the run converges with the poor number of samples and iterations
@@ -208,99 +208,99 @@ Random.seed!(1234)
                 end
             end
 
-            # @testset "Optimize trial state and PEPS simultaneously" begin
-            #     peps = deepcopy(peps_const)
-            #     trial_state_CDW = deepcopy(trial_state) # use the guessed trial state as initial guess for the optimization
-            #     θ = vcat(vec(QuantumNaturalGradient.Parameters(peps).obj), trial_state_CDW.η) # only PEPS parameters, the trial state is fixed
+            @testset "Optimize trial state and PEPS simultaneously" begin
+                peps = deepcopy(peps_const)
+                trial_state_CDW = deepcopy(trial_state) # use the guessed trial state as initial guess for the optimization
+                θ = vcat(vec(QuantumNaturalGradient.Parameters(peps).obj), trial_state_CDW.η) # only PEPS parameters, the trial state is fixed
                 
-            #     Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(peps, Hubbard_ham; trial_state=trial_state_CDW, threaded=true)
+                Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(peps, Hubbard_ham; trial_state=trial_state_CDW, threaded=true)
 
-            #     loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ;
-            #             integrator,
-            #             verbosity=0,
-            #             sample_nr=Nsamples,
-            #             maxiter=maxiters,
-            #     )
-            #     @test isapprox(loss_value, E_exact; atol=1e-8)
+                loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ;
+                        integrator,
+                        verbosity=0,
+                        sample_nr=Nsamples,
+                        maxiter=maxiters,
+                )
+                @test isapprox(loss_value, E_exact; atol=1e-8)
 
-            #     energy , energy_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, Hubbard_ham; trial_state=trial_state_CDW, it=Nmeasure)...)
-            #     Ntot_mean , Ntot_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_Ntot_op(Lx, Ly); trial_state=trial_state_CDW, it=Nmeasure)...)
-            #     M2_mean , M2_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_M_cdw2_op(Lx, Ly); trial_state=trial_state_CDW, it=Nmeasure)...)
-            #     nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_nn_dd_corr_op(Lx, Ly); trial_state=trial_state_CDW, it=Nmeasure)...)
+                energy , energy_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, Hubbard_ham; trial_state=trial_state_CDW, it=Nmeasure)...)
+                Ntot_mean , Ntot_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_Ntot_op(Lx, Ly); trial_state=trial_state_CDW, it=Nmeasure)...)
+                M2_mean , M2_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_M_cdw2_op(Lx, Ly); trial_state=trial_state_CDW, it=Nmeasure)...)
+                nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps, QuantumNaturalfPEPS.build_nn_dd_corr_op(Lx, Ly); trial_state=trial_state_CDW, it=Nmeasure)...)
 
-            #     # check if the error is within the expected sampling error
-            #     atol = 3 / sqrt(Nmeasure)
-            #     @test Ntot_err <= atol
-            #     @test energy_err <= atol
-            #     @test M2_error <= atol
-            #     @test nn_avg_error <= atol
+                # check if the error is within the expected sampling error
+                atol = 3 / sqrt(Nmeasure)
+                @test Ntot_err <= atol
+                @test energy_err <= atol
+                @test M2_error <= atol
+                @test nn_avg_error <= atol
 
-            #     # check for the accuracy of sampled results
-            #     @test isapprox(Ntot_mean, 8.0; atol=atol)
-            #     @test isapprox(energy, E_exact; atol=atol)
-            #     @test isapprox(M2_mean/N, 4.0; atol=atol)
-            #     @test isapprox(nn_avg_mean, 0.0; atol=atol)
-            # end
+                # check for the accuracy of sampled results
+                @test isapprox(Ntot_mean, 8.0; atol=atol)
+                @test isapprox(energy, E_exact; atol=atol)
+                @test isapprox(M2_mean/N, 4.0; atol=atol)
+                @test isapprox(nn_avg_mean, 0.0; atol=atol)
+            end
         end
     end
 
     # This is a short sanity check and designed in such a way, that the time needed to run this test file is not too long
-    # @testset "Test no onsite-potential limit with t=1.0 and U=0.0" begin
-    #     t = 1.0
-    #     U = 0.0
-    #     Hubbard_ham = QuantumNaturalfPEPS.hamiltonian_hubbard(t, U, Lx, Ly)
+    @testset "Test no onsite-potential limit with t=1.0 and U=0.0" begin
+        t = 1.0
+        U = 0.0
+        Hubbard_ham = QuantumNaturalfPEPS.hamiltonian_hubbard(t, U, Lx, Ly)
         
-    #     # Free fermion (U=0) 4×4 OBC: ε_{m,n} = -2t[cos(mπ/5)+cos(nπ/5)]; 6 negative levels -(1+√5), -√5(×2), -(√5-1), -1(×2).
-    #     # At half-filling (N=8), filling 6 negative + 2 zero-energy levels: E = -(1+√5) - 2√5 - (√5-1) - 2·1 = -2 - 4√5.
-    #     E_exact = -2 - 4*sqrt(5)
+        # Free fermion (U=0) 4×4 OBC: ε_{m,n} = -2t[cos(mπ/5)+cos(nπ/5)]; 6 negative levels -(1+√5), -√5(×2), -(√5-1), -1(×2).
+        # At half-filling (N=8), filling 6 negative + 2 zero-energy levels: E = -(1+√5) - 2√5 - (√5-1) - 2·1 = -2 - 4√5.
+        E_exact = -2 - 4*sqrt(5)
 
-    #     # set up Hilbert space and PEPS parameters
-    #     bond_dim = 1 # free fermions should be completely described by the Gaussian state, so a trivial PEPS is sufficient
-    #     hilbert = ITensors.siteinds("Fermion", Lx, Ly)
+        # set up Hilbert space and PEPS parameters
+        bond_dim = 1 # free fermions should be completely described by the Gaussian state, so a trivial PEPS is sufficient
+        hilbert = ITensors.siteinds("Fermion", Lx, Ly)
         
-    #     #= Create different initial PEPS =#
-    #     peps_const = PEPS(hilbert; bond_dim=bond_dim, tensor_init=constant_peps_tensor)
+        #= Create different initial PEPS =#
+        peps_const = PEPS(hilbert; bond_dim=bond_dim, tensor_init=constant_peps_tensor)
 
-    #     # Free fermion trial state
-    #     η, trial_state = create_free_fermion_trial_state(Lx, Ly)
+        # Free fermion trial state
+        η, trial_state = create_free_fermion_trial_state(Lx, Ly)
 
-    #     # Setup the Integrator and Solver
-    #     integrator = QuantumNaturalGradient.Euler(lr=0.05)
-    #     solver = QuantumNaturalGradient.EigenSolver()
+        # Setup the Integrator and Solver
+        integrator = QuantumNaturalGradient.Euler(lr=0.05)
+        solver = QuantumNaturalGradient.EigenSolver()
 
-    #     # optimize trial state (TODO: this is not converged with the sample size and number of iterations used here, but it is sufficient for a sanity check)
-    #     loss_value, trained_η = optimize_trial_state_full_ham(Hubbard_ham, rand(length(η)); maxiter=50, lr=0.05, verbosity=0)
-    #     @test isapprox(loss_value, E_exact; atol=1e-2)
+        # optimize trial state (TODO: this is not converged with the sample size and number of iterations used here, but it is sufficient for a sanity check)
+        loss_value, trained_η = optimize_trial_state_full_ham(Hubbard_ham, rand(length(η)); maxiter=50, lr=0.05, verbosity=0)
+        @test isapprox(loss_value, E_exact; atol=1e-2)
 
-    #     # do sanity check with optimal trial state from theory and id peps -> should converge directly
-    #     Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(peps_const, Hubbard_ham; trial_state=trial_state, fix_trial_state=true, threaded=true)
-    #     θ = vec(QuantumNaturalGradient.Parameters(peps_const).obj) # only PEPS parameters, the trial state is fixed
+        # do sanity check with optimal trial state from theory and id peps -> should converge directly
+        Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(peps_const, Hubbard_ham; trial_state=trial_state, fix_trial_state=true, threaded=true)
+        θ = vec(QuantumNaturalGradient.Parameters(peps_const).obj) # only PEPS parameters, the trial state is fixed
 
-    #     @time loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ; 
-    #     integrator, 
-    #     verbosity=0,
-    #     sample_nr=Nsamples,
-    #     maxiter=maxiters
-    #     )
+        @time loss_value, trained_θ, misc = QuantumNaturalGradient.evolve(Oks_and_Eks, θ; 
+        integrator, 
+        verbosity=0,
+        sample_nr=Nsamples,
+        maxiter=maxiters
+        )
 
-    #     @test loss_value ≈ E_exact
+        @test loss_value ≈ E_exact
 
-    #     energy , energy_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps_const, Hubbard_ham; trial_state=trial_state, it=Nmeasure)...)
-    #     Ntot_mean , Ntot_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps_const, QuantumNaturalfPEPS.build_Ntot_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
-    #     M2_mean , M2_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps_const, QuantumNaturalfPEPS.build_M_cdw2_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
-    #     nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps_const, QuantumNaturalfPEPS.build_nn_dd_corr_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
+        energy , energy_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps_const, Hubbard_ham; trial_state=trial_state, it=Nmeasure)...)
+        Ntot_mean , Ntot_err, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps_const, QuantumNaturalfPEPS.build_Ntot_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
+        M2_mean , M2_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps_const, QuantumNaturalfPEPS.build_M_cdw2_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
+        nn_avg_mean , nn_avg_error, _ = QuantumNaturalfPEPS.weighted_mean_error(QuantumNaturalfPEPS.get_ExpectationValue(peps_const, QuantumNaturalfPEPS.build_nn_dd_corr_op(Lx, Ly); trial_state=trial_state, it=Nmeasure)...)
 
-    #     # check if the error is within the expected sampling error
-    #     atol = 1 / sqrt(Nmeasure)
-    #     @test Ntot_err <= atol
-    #     @test energy_err <= atol
-    #     @test M2_error / N <= atol
-    #     @test nn_avg_error <= atol
+        # check if the error is within the expected sampling error
+        atol = 1 / sqrt(Nmeasure)
+        @test Ntot_err <= atol
+        @test energy_err <= atol
+        @test M2_error / N <= atol
+        @test nn_avg_error <= atol
 
-    #     # check for the accuracy of sampled results
-    #     @test isapprox(Ntot_mean, 8.0; atol=atol)
-    #     @test isapprox(energy, -2-4*sqrt(5); atol=atol)
-    #     @test 0.375 - M2_error <= M2_mean / N <= 0.625 + M2_error
-    #     @test 0.178 - nn_avg_error < nn_avg_mean < 0.218 + nn_avg_error
-    # end
+        # check for the accuracy of sampled results
+        @test isapprox(Ntot_mean, 8.0; atol=atol)
+        @test isapprox(energy, -2-4*sqrt(5); atol=atol)
+        @test 0.375 - M2_error <= M2_mean / N <= 0.625 + M2_error
+        @test 0.178 - nn_avg_error < nn_avg_mean < 0.218 + nn_avg_error
+    end
 end
