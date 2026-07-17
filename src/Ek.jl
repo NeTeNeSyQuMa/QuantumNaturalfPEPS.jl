@@ -367,3 +367,71 @@ function get_Ek(peps::AbstractPEPS, ham_op::TensorOperatorSum, env_top::Vector{E
 
     return convert_if_real(Ek)
 end
+
+#= 
+    Trial state variants
+=#
+
+function get_Ek_Slater(GS::GaussianState, H_BdG_exact::Hermitian, S::Matrix{Int64}; 
+    timer=TimerOutput(), 
+    parity_sector::Int = 0,
+    amp_cache=nothing, 
+    SlaterConnections::Union{Nothing,Dict{Tuple{Int, Int}, SlaterConnection}}=nothing)
+
+    Ek = zero(ComplexF64)
+    j_prime = collect(vec(S))
+
+    amp_cache = isnothing(amp_cache) ? build_amplitude_cache(GS) : amp_cache
+    SlaterConnections = isnothing(SlaterConnections) ? get_Slater_Ek_terms(H_BdG_exact) : SlaterConnections
+
+    S_jprime = get_amplitude(amp_cache, j_prime)
+
+    # Only configurations differing by at most two occupations can contribute
+    # for quadratic BdG Hamiltonians.
+
+    # diagonal contribution j = j_prime
+    for a in eachindex(j_prime)
+        if j_prime[a] == 1 && haskey(SlaterConnections, (a, a))
+            Ek += SlaterConnections[(a, a)].t
+        end
+    end
+
+    # off-diagonal contributions for nonzero connectivity only
+    # only loop over i<j pairs to avoid double counting and also note that we can use: t_ij = t_ji* and Δ_ij = -Δ_ji
+    j = copy(j_prime)
+    @timeit timer "off-diagonal H_BdG_exact elements" for (a, b) in keys(SlaterConnections)
+        a==b && continue # skip diagonal terms, already included above
+
+        ja = j_prime[a] 
+        jb = j_prime[b]
+        particles_between_ab = sum(@view j_prime[(a+1):(b-1)])
+        fsign = isodd(particles_between_ab) ? -1 : 1
+
+        coeff = zero(ComplexF64)
+        if ja == 0 && jb == 1 # hopping from b to a such that we have nonzero overlap: <j'| t_ab c_a^† c_b |j> = sign * t_ab * S_j
+            coeff = SlaterConnections[(a, b)].t
+        elseif ja == 1 && jb == 0 # hopping from a to b such that we have nonzero overlap: <j'| t_ba c_b^† c_a |j> = sign * t_ba * S_j
+            coeff = conj(SlaterConnections[(a, b)].t)
+        elseif ja == 0 && jb == 0 # pairing of a and b such that we have nonzero overlap: <j'| Δ_ab c_a c_b |j> = sign * Δ_ab * S_j
+            coeff = SlaterConnections[(a, b)].Δ
+        else # pairing of a and b such that we have nonzero overlap: <j'| Δ_ab* c†_a c†_b |j> = sign * conj(Δ_ab) * S_j
+            coeff = conj(SlaterConnections[(a, b)].Δ)
+        end
+
+        h_elem = fsign * coeff
+        iszero(h_elem) && continue
+
+        # create allowed configuration j by flipping the occupations at a and b compared to j_prime
+        j[a] = 1 - ja
+        j[b] = 1 - jb
+        S_j = get_amplitude(amp_cache, j)
+
+        Ek += h_elem * exp(log(S_j) - log(S_jprime))
+
+        # restore j to j_prime for the next iteration
+        j[a] = ja
+        j[b] = jb
+    end
+
+    return real(Ek)
+end

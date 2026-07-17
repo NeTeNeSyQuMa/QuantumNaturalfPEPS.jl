@@ -743,6 +743,42 @@ function get_bogoliubov_blocks(M::AbstractMatrix)
 end
 
 """
+    residual_tol(A...)
+
+ε-and-n-scaled tolerance for the decomposition residual checks in the Bogoliubov/Bloch-Messiah path
+(LAPACK-style backward error): `c · n · ε · max(1, ‖A‖∞, ...)`, using the max-entry norm so the bound
+tracks matrix size, floating-point precision, and operand scale instead of a fixed constant. 
+The safety factor `c = 1e6` is deliberately generous: several residuals sit downstream of `eigen` on (near-)degenerate
+spectra, which amplifies rounding well beyond the `n·ε` of a single backward-stable factorization. 
+Real bugs (wrong sign/transpose/index) produce O(1) residuals, so the margin remains several orders of magnitude.
+
+- Backward Stability: 
+    LAPACK routines are mathematically designed to be backward stable. 
+    This means they produce an answer x̂ that is the exact solution to a slightly perturbed system (A + E)x̂ = b + f.
+
+- Motivation of all terms:
+    - `n`: The size of the matrix. Larger matrices can accumulate more rounding errors.
+    - `ε`: The machine epsilon for the floating-point type. This represents the relative precision of the floating-point representation.
+    - `max(1, ‖A‖∞, ...)`: The maximum of 1 and the infinity norm of the matrix A. This scales the tolerance based on the magnitude of the matrix entries.
+    - `c`: A safety factor to account for additional numerical errors that may arise in subsequent computations, especially when dealing with near-degenerate spectra.
+        - The factor of 1e6 is chosen by trial and error / heuristics
+        - Higher c values make the tolerance more loose, while lower values make it stricter.
+        - Example: 
+            - For a matrix A with size n=1000, machine epsilon ε≈1e-16 (for Float64), and ‖A‖∞≈10, the tolerance would be:
+                - tol = 1e6 * 1000 * 1e-16 * max(1, 10) ≈ 1e-7
+                - tol = 1e4 * 1000 * 1e-16 * max(1, 10) ≈ 1e-9
+            - This means that if the residual of a computation is less than this value, it is considered acceptable.
+        - For our degenerate / zero mode cases, we need a very loose tolerance to avoid false positives in the residual checks. 
+            - If the tolerance is too strict, we may incorrectly flag a correct computation as having a large residual due to numerical noise.
+"""
+function residual_tol(As::AbstractMatrix...)
+    T = promote_type(map(A -> real(float(eltype(A))), As)...)
+    n = maximum(max(size(A)...) for A in As) # max(m, n) matches the perturbation bounds for rectangular operands
+    scale = max(one(T), maximum(norm(A, Inf) for A in As))
+    return 1e6 * n * eps(T) * scale
+end
+
+"""
     bogoliubov(H::Hermitian)
 
 Return the spectrum and canonical transform that diagonalize the fermionic quadratic Hamiltonian `H`.
@@ -764,7 +800,7 @@ Degenerate spectra are handled robustly by splitting the modes into two groups:
 This guarantees the canonical (anti)commutation relations by construction, so the resulting `M` is always a
 valid Bogoliubov transformation and is well-conditioned for the subsequent Bloch-Messiah decomposition.
 """
-function bogoliubov(H::Hermitian; tol=1e-8)
+function bogoliubov(H::Hermitian)
     N = div(size(H, 1), 2)
 
     # Particle-hole conjugation C: [X_u; X_v] -> [conj(X_v); conj(X_u)]. C is the antiunitary
@@ -810,7 +846,7 @@ function bogoliubov(H::Hermitian; tol=1e-8)
         else
             # Exact zero modes: the E = 0 eigenspace is mapped onto itself by C and makes [X  C(X)] rank
             # deficient, so we rebuild a particle-hole symmetric (Majorana) basis and pair them into fermions.
-            X = hcat(X, _zero_mode_fermions(M0[:, zero_idx], _ph_conj, n_zero_pairs; tol=zero_tol))
+            X = hcat(X, _zero_mode_fermions(M0[:, zero_idx], _ph_conj, n_zero_pairs))
         end
     end
 
@@ -822,9 +858,9 @@ function bogoliubov(H::Hermitian; tol=1e-8)
     # E = diag(M' H M) so that E[k] = -E[k+N] exactly.
     E = real.(diag(M' * H * M))
 
-    @assert isapprox(M' * M, I, atol=tol) "Bogoliubov M is not unitary."
-    @assert isapprox(U'U + V'V, I, atol=tol) "Bogoliubov blocks violate U'U + V'V = I."
-    @assert isapprox(transpose(U) * V + transpose(V) * U, zeros(N, N), atol=tol) "Bogoliubov blocks violate UᵀV + VᵀU = 0."
+    @assert norm(M' * M - I, Inf) < residual_tol(M) "Bogoliubov M is not unitary."
+    @assert norm(U'U + V'V - I, Inf) < residual_tol(U, V) "Bogoliubov blocks violate U'U + V'V = I."
+    @assert norm(transpose(U) * V + transpose(V) * U, Inf) < residual_tol(U, V) "Bogoliubov blocks violate UᵀV + VᵀU = 0."
 
     return E, M
 end
@@ -859,7 +895,7 @@ function zero_mode_threshold(E::AbstractVector; rel_floor=1e-11, rel_ceiling=1e-
 end
 
 """
-    _zero_mode_fermions(Z, _ph_conj, n_pairs; tol=1e-7)
+    _zero_mode_fermions(Z, _ph_conj, n_pairs)
 
 Build `n_pairs` fermionic zero-mode creation vectors from the `2*n_pairs` orthonormal zero-energy
 eigenvectors stored as columns of `Z`. The zero-mode subspace is invariant under particle-hole
@@ -870,7 +906,7 @@ basis exactly (to machine precision) and robustly via a single real symmetric ei
 Majoranas are then paired into complex fermions `c† = (γ₁ + i γ₂)/√2`, whose columns, together with their
 `C`-images, satisfy the CAR exactly.
 """
-function _zero_mode_fermions(Z::AbstractMatrix, _ph_conj, n_pairs::Int; tol=1e-7)
+function _zero_mode_fermions(Z::AbstractMatrix, _ph_conj, n_pairs::Int)
     # Re-orthonormalize the zero-mode eigenvectors. For a degenerate eigenvalue cluster (all the
     # zero modes share E = 0), LAPACK's MRRR driver (syevr, used by `eigen` for real-symmetric
     # matrices) can return eigenvectors that span the correct subspace but are not mutually
@@ -885,7 +921,7 @@ function _zero_mode_fermions(Z::AbstractMatrix, _ph_conj, n_pairs::Int; tol=1e-7
     # so T(w) = A * conj(w) is an antiunitary involution (T² = I).
     A = Z' * _ph_conj(Z)
     A = (A + transpose(A)) / 2 # enforce the exact symmetry expected of a PH involution
-    @assert isapprox(A' * A, I, atol=tol) "Particle-hole operator is not unitary on the zero-mode subspace."
+    @assert norm(A' * A - I, Inf) < residual_tol(A) "Particle-hole operator is not unitary on the zero-mode subspace."
 
     dim = size(A, 1) # = 2 * n_pairs
     # Real representation of T on (Re w, Im w): writing w = wr + i·wi and A = Ar + i·Ai,
@@ -936,7 +972,7 @@ Return a pair `(S, X)` where `X = transpose(S)*P*S` is the canonical form for `P
 """
 function skew_canonical_form(P::AbstractMatrix)
     # Check skew-symmetry
-    @assert isapprox(transpose(P), -P; atol=1e-10) "P should be skew-symmetric"
+    @assert norm(transpose(P) + P, Inf) < residual_tol(P) "P should be skew-symmetric"
 
     W = P'P
     @assert ishermitian(W)
@@ -1088,20 +1124,20 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
     U,V = get_bogoliubov_blocks(M)
 
     Q = conj.(V) * transpose(V)
-    @assert Q' ≈ Q "Q should be Hermitian"
+    @assert norm(Q' - Q, Inf) < residual_tol(Q) "Q should be Hermitian"
     Q = Hermitian(Q) # enforce exact Hermiticity
     P = conj.(V) * transpose(U)
 
-    @assert isapprox(transpose(P), -P; atol=1e-10) "P should be skew-symmetric"
+    @assert norm(transpose(P) + P, Inf) < residual_tol(P) "P should be skew-symmetric"
     P = (P - transpose(P)) / 2 # enforce exact skew-symmetry
-    @assert isapprox(Q*P, P*conj.(Q); atol=1e-10) "Q*P != P*conj.(Q)"
+    @assert norm(Q*P - P*conj.(Q), Inf) < residual_tol(Q, P) "Q*P != P*conj.(Q)"
 
     E_Q, B = eigen(Q; sortby = (x -> -real(x)))
-    @assert norm(B' * B - I, Inf) < 1e-10
-    @assert norm(B * B' - I, Inf) < 1e-10 
+    @assert norm(B' * B - I, Inf) < residual_tol(B)
+    @assert norm(B * B' - I, Inf) < residual_tol(B)
     # Q_bar = real(B'*Q*B)
     P_bar = B'*P*conj.(B)
-    @assert isapprox(P_bar, -transpose(P_bar); atol=1e-10) "P_bar should be skew-symmetric"
+    @assert norm(P_bar + transpose(P_bar), Inf) < residual_tol(P_bar) "P_bar should be skew-symmetric"
     P_bar = (P_bar - transpose(P_bar)) / 2 # enforce exact skew-symmetry
     
     # Bring P_bar to canonical form by block-diagonalizing within degenerate subspaces of Q to avoid mixing
@@ -1132,7 +1168,7 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
     S = zeros(ComplexF64, size(P_bar))
     for idx in q_blocks
         P_sub = P_bar[idx, idx] # Extract the sub-block corresponding to the eigenvalue
-        if norm(P_sub, Inf) < 1e-10
+        if norm(P_sub, Inf) < residual_tol(P_bar)
             # P carries no useful pairing information in this degenerate block
             # (empty or fully occupied Slater block). The gauge is then completely
             # underdetermined, so we bypass the skew-canonical form routine and choose
@@ -1142,24 +1178,24 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
             # P has structure, use it to fix the gauge.
             S_sub, X_sub = skew_canonical_form(P_sub) # Canonical form for this block
             S_sub, _ = absorb_phases(S_sub, X_sub)  # makes canonical blocks real
-            @assert (norm(S_sub' * S_sub - I(length(idx)), Inf) < 1e-10) "Gauge fixing failed in a degenerate block."
+            @assert (norm(S_sub' * S_sub - I(length(idx)), Inf) < residual_tol(S_sub)) "Gauge fixing failed in a degenerate block."
         end
         S[idx, idx] = S_sub # Place the canonical transformation in the correct block of S
     end
     
-    @assert norm(S' * S - I, Inf) < 1e-10
-    @assert norm(S * S' - I, Inf) < 1e-10  
+    @assert norm(S' * S - I, Inf) < residual_tol(S)
+    @assert norm(S * S' - I, Inf) < residual_tol(S)
 
     P_canonical = S' * P_bar * conj.(S)
 
     A = permute_zero_cols_to_end(P_canonical)
-    @assert norm(A' * A - I, Inf) < 1e-10
-    @assert norm(A * A' - I, Inf) < 1e-10  
+    @assert norm(A' * A - I, Inf) < residual_tol(A)
+    @assert norm(A * A' - I, Inf) < residual_tol(A)
 
     D = B * S * A
-    @assert D' * D ≈ I "D should be unitary"
+    @assert norm(D' * D - I, Inf) < residual_tol(D) "D should be unitary"
 
-    @assert isapprox(D'*P*conj(D), D'*conj(V)*transpose(U)*conj(D); atol=1e-10)
+    @assert norm(D'*P*conj(D) - D'*conj(V)*transpose(U)*conj(D), Inf) < residual_tol(D, P)
     
     F = MatrixFactorizations.rq(D' * U)
     R = Matrix(F.R)
@@ -1197,7 +1233,7 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
         row_support = findall(i -> norm(@view Vbar[i, occ]) > 1e-9, axes(Vbar, 1))
         @assert length(row_support) == length(occ) "Occupied Slater block is not square; cannot canonicalize."
         Vblk = Vbar[row_support, occ]
-        @assert isapprox(Vblk' * Vblk, I, atol=1e-8) "Occupied Slater block is not unitary."
+        @assert norm(Vblk' * Vblk - I, Inf) < residual_tol(Vblk) "Occupied Slater block is not unitary."
 
         Fo = svd(Vblk) # Vblk = Fo.U * Diagonal(Fo.S) * Fo.V'
         D[:, row_support] = D[:, row_support] * conj(Fo.U) # rotate Vbar rows by Fo.U'
@@ -1226,22 +1262,19 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
         C = Phi' * C
     end
 
-    @assert C'C ≈ I
-    @assert Q'Q ≈ I
+    @assert norm(C'C - I, Inf) < residual_tol(C)
+    @assert norm(Q'Q - I, Inf) < residual_tol(Q)
 
-    @assert U ≈ D*Ubar*C "Something went wrong with Bloch-Messiah decomposition for U"
-    @assert V ≈ conj.(D)*Vbar*C "Something went wrong with Bloch-Messiah decomposition for V"
+    @assert norm(U - D*Ubar*C, Inf) < residual_tol(U) "Something went wrong with Bloch-Messiah decomposition for U"
+    @assert norm(V - conj.(D)*Vbar*C, Inf) < residual_tol(V) "Something went wrong with Bloch-Messiah decomposition for V"
 
     # remove numerical noise. Ubar and Vbar are real by construction; the residual imaginary parts are
-    # pure floating-point noise from the (complex) intermediate gauge rotations. We bound them with the
-    # max-entry (Inf) norm rather than `isapprox`, whose Frobenius norm grows with the matrix size and so
-    # spuriously fails the fixed 1e-10 tolerance for larger systems (e.g. the 4x4 lattice during
-    # optimization, where the per-entry noise ~1e-11 sums to >1e-10 over the 2N x 2N matrix).
-    real_tol = 1e-8
-    @assert maximum(abs, imag(Ubar)) < real_tol "Ubar should be real (max imaginary entry $(maximum(abs, imag(Ubar))))"
+    # pure floating-point noise from the (complex) intermediate gauge rotations, bounded entrywise by the
+    # ε-and-n-scaled residual tolerance.
+    @assert maximum(abs, imag(Ubar)) < residual_tol(Ubar) "Ubar should be real (max imaginary entry $(maximum(abs, imag(Ubar))))"
     Ubar = real(Ubar)
     Ubar[abs.(Ubar) .< 1e-12] .= 0.0
-    @assert maximum(abs, imag(Vbar)) < real_tol "Vbar should be real (max imaginary entry $(maximum(abs, imag(Vbar))))"
+    @assert maximum(abs, imag(Vbar)) < residual_tol(Vbar) "Vbar should be real (max imaginary entry $(maximum(abs, imag(Vbar))))"
     Vbar = real(Vbar)
     Vbar[abs.(Vbar) .< 1e-12] .= 0.0
 
@@ -1249,7 +1282,8 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
     UV_mat = [Ubar Vbar; Vbar Ubar]
     Cmat = [C zeros(N,N); zeros(N,N) conj.(C)]
 
-    @assert isapprox(M, Dmat * UV_mat * Cmat; atol=1e-10) "Bloch-Messiah decomposition failed to reconstruct Bogoliubov transformation M"
+    @assert norm(M - Dmat * UV_mat * Cmat, Inf) < residual_tol(M) "Bloch-Messiah decomposition failed to reconstruct Bogoliubov transformation M"
+    
     return Dmat, UV_mat, Cmat
 end
 
@@ -1372,181 +1406,4 @@ function get_matrix_element(H_BdG::Hermitian, j_prime::Vector{Int}, j::Vector{In
         # If configurations differ by 1, 3, 4, or more sites, the matrix element is 0.
         return 0.0 + 0.0im
     end
-end
-
-
-###########################################################################################################################
-# The following functions are only for testing the Slater trial state optimization WITHOUT PEPS joint sampling.
-#
-# TODO: Remove in future versions or move to dedicated test files
-###########################################################################################################################
-
-function generate_Oks_and_Eks_Slater(H_BdG_exact::Hermitian, H_BdG_func::Function, N::Int; parity_sector::Int = 0, target_state::Int=0)
-    @assert parity_sector == 0 || parity_sector == 1 "Parity sector must be either 0 (even) or 1 (odd)"
-
-    function Oks_and_Eks_(η::Vector{T}, sample_nr::Integer; timer=TimerOutput(), kwargs...) where T
-        # create GS from η
-        GS = QuantumNaturalfPEPS.GaussianState(H_BdG_func, N; η=η, parity_sector=parity_sector, target_state=target_state)
-        return @timeit timer "Oks_and_Eks" Oks_and_Eks_singlethread_Slater(GS, H_BdG_exact, sample_nr; timer=timer, kwargs...)     
-    end
-
-    return Oks_and_Eks_
-end
-
-# The central function is Oks and Eks
-function Oks_and_Eks_singlethread_Slater(GS::GaussianState, H_BdG_exact::Hermitian, sample_nr::Integer; timer=TimerOutput(), kwargs...)
-    eltype_ = ComplexF64
-    eltype_real = real(eltype_)
-
-    amp_cache = @timeit timer "amp_cache_base" build_amplitude_cache(GS)
-    # slater_loggrad_cache = @timeit timer "slater_loggrad_cache" build_slater_loggradient_cache(GS)
-    SlaterConnections = @timeit timer "SlaterConnections" get_Slater_Ek_terms(H_BdG_exact)
-    
-    Oks = Matrix{eltype_}(undef, length(GS.η), sample_nr)
-    Eks = Vector{eltype_}(undef, sample_nr)
-    logψs = Vector{Complex{eltype_real}}(undef, sample_nr)
-    samples = Vector{Matrix{Int}}(undef, sample_nr)
-    logpc = Vector{eltype_real}(undef, sample_nr)
-    contract_dims = Vector{Int}(undef, sample_nr)
-
-    for i in 1:sample_nr
-        Ok_view = @view Oks[:, i]
-        _, Eks[i], logψs[i], samples[i], logpc[i], contract_dims[i] = Ok_and_Ek_Slater(GS, H_BdG_exact; timer, Ok=Ok_view, amp_cache, SlaterConnections, kwargs...)
-    end
-    
-    #return Ok, E_loc, logψ, samples, compute_importance_weights(logψ, logpc)
-    Dict(:Oks => transpose(Oks), :Eks => Eks, :logψs => logψs, :samples => samples, :weights => compute_importance_weights(logψs, logpc), :contract_dims => contract_dims)
-    # returns Gradient, local Energy, log(<ψ|S>), samples S, p
-end
-
-# |psi> = sum_j S_j |j>
-# <j'|psi> = sum_j S_j <j'|j> = S_j_prime
-# E_loc = <j'|H|psi> / <j'|psi> =  sum_j <j_prime|H|j> * S_j / S_j_prime, where j_prime is the sampled configuration and j runs through all possible configurations.
-function get_Ek_Slater(GS::GaussianState, H_BdG_exact::Hermitian, S::Matrix{Int64}; 
-    timer=TimerOutput(), 
-    parity_sector::Int = 0,
-    amp_cache=nothing, 
-    SlaterConnections::Union{Nothing,Dict{Tuple{Int, Int}, SlaterConnection}}=nothing)
-
-    Ek = zero(ComplexF64)
-    j_prime = collect(vec(S))
-
-    amp_cache = isnothing(amp_cache) ? build_amplitude_cache(GS) : amp_cache
-    SlaterConnections = isnothing(SlaterConnections) ? get_Slater_Ek_terms(H_BdG_exact) : SlaterConnections
-
-    S_jprime = get_amplitude(amp_cache, j_prime)
-
-    # Only configurations differing by at most two occupations can contribute
-    # for quadratic BdG Hamiltonians.
-
-    # diagonal contribution j = j_prime
-    for a in eachindex(j_prime)
-        if j_prime[a] == 1 && haskey(SlaterConnections, (a, a))
-            Ek += SlaterConnections[(a, a)].t
-        end
-    end
-
-    # off-diagonal contributions for nonzero connectivity only
-    # only loop over i<j pairs to avoid double counting and also note that we can use: t_ij = t_ji* and Δ_ij = -Δ_ji
-    j = copy(j_prime)
-    @timeit timer "off-diagonal H_BdG_exact elements" for (a, b) in keys(SlaterConnections)
-        a==b && continue # skip diagonal terms, already included above
-
-        ja = j_prime[a] 
-        jb = j_prime[b]
-        particles_between_ab = sum(@view j_prime[(a+1):(b-1)])
-        fsign = isodd(particles_between_ab) ? -1 : 1
-
-        coeff = zero(ComplexF64)
-        if ja == 0 && jb == 1 # hopping from b to a such that we have nonzero overlap: <j'| t_ab c_a^† c_b |j> = sign * t_ab * S_j
-            coeff = SlaterConnections[(a, b)].t
-        elseif ja == 1 && jb == 0 # hopping from a to b such that we have nonzero overlap: <j'| t_ba c_b^† c_a |j> = sign * t_ba * S_j
-            coeff = conj(SlaterConnections[(a, b)].t)
-        elseif ja == 0 && jb == 0 # pairing of a and b such that we have nonzero overlap: <j'| Δ_ab c_a c_b |j> = sign * Δ_ab * S_j
-            coeff = SlaterConnections[(a, b)].Δ
-        else # pairing of a and b such that we have nonzero overlap: <j'| Δ_ab* c†_a c†_b |j> = sign * conj(Δ_ab) * S_j
-            coeff = conj(SlaterConnections[(a, b)].Δ)
-        end
-
-        h_elem = fsign * coeff
-        iszero(h_elem) && continue
-
-        # create allowed configuration j by flipping the occupations at a and b compared to j_prime
-        j[a] = 1 - ja
-        j[b] = 1 - jb
-        S_j = get_amplitude(amp_cache, j)
-
-        Ek += h_elem * exp(log(S_j) - log(S_jprime))
-
-        # restore j to j_prime for the next iteration
-        j[a] = ja
-        j[b] = jb
-    end
-
-    return real(Ek)
-end
-
-# Calculates the Energy and Gradient of a given peps and hamiltonian
-function Ok_and_Ek_Slater(GS::GaussianState, H_BdG_exact::Hermitian; timer=TimerOutput(), Ok=nothing, sampling_mode=:full,
-                   resample=false, correct_sampling_error=true, resample_energy=0, # TODO: remove
-                   amp_cache=nothing, SlaterConnections=nothing,
-                   )
-    
-    S, logpc = @timeit timer "sampling" get_sample(GS; timer) # draw a sample
-    occ_string = collect(vec(S')) # julia vec(matrix) is column major, whereas we use row major in the sampling logic
-
-    if amp_cache === nothing
-        amp_cache = @timeit timer "amp_cache" build_amplitude_cache(GS)
-    end
-    
-    # initialize the flipped logψ dictionary, will be used to compute other observables or for the resampling
-    # Ek_terms = @timeit timer "precomp_sHψ_elems"  QuantumNaturalGradient.get_precomp_sOψ_elems(ham_op, S; get_flip_sites=true)
-    E_loc = @timeit timer "energy" get_Ek_Slater(GS, H_BdG_exact, S; timer, amp_cache=amp_cache, SlaterConnections=SlaterConnections) # compute the local energy
-    grad = @timeit timer "log_gradients" get_Ok(GS, S, Ok) # compute the gradient
-
-    logψ = log(get_amplitude(amp_cache, occ_string))
-    max_bond = 2 # dummy
-    return grad, E_loc, logψ, S, logpc, max_bond
-end
-
-# samples from ρ_r and updates pc
-function sample_ρr(GS::GaussianState, S, r, c, M_cache::OccupationProjectorCache)
-    n_measured = (r - 1) * size(S, 2) + c
-    site_idx = (c - 1) * size(S, 1) + r # true column-major linear index
-
-    # flip the occupation of the current site to compute the probabilities for both configurations
-    set_occ_projector_block!(M_cache.M_j, site_idx, 0)
-    p0 = get_prob!(GS, M_cache, n_measured)
-    set_occ_projector_block!(M_cache.M_j, site_idx, 1)
-    p1 = get_prob!(GS, M_cache, n_measured)
-
-    p_final = [p0, p1]
-
-    i = sample_p(p_final, normalize=true)
-
-    # update occ projector for drawn occupation
-    set_occ_projector_block!(M_cache.M_j, site_idx, i-1)
-
-    return i-1, p_final[i]
-end
-
-# generates a sample of a given peps along with pc and the top environments
-function get_sample(GS::GaussianState; timer=TimerOutput())
-    L = Int(sqrt(GS.N)) # TODO: this only works for square lattices, we should make this more general
-
-    S = Array{Int64}(undef, L, L)
-    M_cache = OccupationProjectorCache(GS.N)
-    
-    logpc = 0
-    # we loop through every row
-    for i in 1:L
-        # then we loop through the different sites in one row
-        for j in 1:L
-            # sample from Slater wave function
-            S[i, j], pc = sample_ρr(GS, S, i, j, M_cache)
-            logpc += log(pc)
-        end
-    end
-    
-    return S, logpc
 end

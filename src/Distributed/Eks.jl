@@ -4,19 +4,19 @@
 # Single entry point for generation of local energies
 ################################################################################
 
-function generate_Eks(peps::AbstractPEPS, ham::OpSum; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
+function generate_Eks(peps::AbstractPEPS, ham::OpSum; kwargs...)
     hilbert = siteinds(peps)
     ham_op = TensorOperatorSum(ham, hilbert)
-    return generate_Eks(peps, ham_op; trial_state=trial_state, kwargs...)
+    return generate_Eks(peps, ham_op; kwargs...)
 end
 
-function generate_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum; threaded=false, multiproc=false, trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
+function generate_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum; threaded=false, multiproc=false, kwargs...)
     if multiproc
-        return generate_Eks_multiproc(peps, ham_op; threaded, trial_state=trial_state, kwargs...)
+        return generate_Eks_multiproc(peps, ham_op; threaded, kwargs...)
     elseif threaded
-        return generate_Eks_threaded(peps, ham_op; trial_state=trial_state, kwargs...)
+        return generate_Eks_threaded(peps, ham_op; kwargs...)
     else
-        return generate_Eks_singlethread(peps, ham_op; trial_state=trial_state, kwargs...)
+        return generate_Eks_singlethread(peps, ham_op; kwargs...)
     end
 end
 
@@ -24,7 +24,7 @@ end
 # Single-threaded version
 ################################################################################
 
-function generate_Eks_singlethread(peps::AbstractPEPS, ham_op::TensorOperatorSum; timer=TimerOutput(), trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
+function generate_Eks_singlethread(peps::AbstractPEPS, ham_op::TensorOperatorSum; timer=TimerOutput(), kwargs...)
     function Eks_(Θ::Vector{T}, sample_nr::Integer; kwargs2...) where T
         # Merge any new keyword arguments
         if length(kwargs2) > 0
@@ -44,13 +44,13 @@ function generate_Eks_singlethread(peps::AbstractPEPS, ham_op::TensorOperatorSum
         # Update the double-layer environment once per call
         @timeit timer "double_layer_envs" update_double_layer_envs!(peps)
         
-        return Eks_singlethread(peps, ham_op, sample_nr; timer=timer, trial_state=trial_state, kwargs...)
+        return Eks_singlethread(peps, ham_op, sample_nr; timer=timer, kwargs...)
     end
     return Eks_
 end
 
 function Eks_singlethread(peps::AbstractPEPS, ham_op::TensorOperatorSum, sample_nr::Integer; 
-                          timer=TimerOutput(), trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
+                          timer=TimerOutput(), kwargs...)
     eltype_ = eltype(peps)
     eltype_real = real(eltype_)
 
@@ -61,7 +61,7 @@ function Eks_singlethread(peps::AbstractPEPS, ham_op::TensorOperatorSum, sample_
     max_bond    = Vector{Int}(undef, sample_nr)
 
     for i in 1:sample_nr
-        Eks[i], logψs[i], samples[i], logpc[i], max_bond[i] = Ek(peps, ham_op; timer=timer, trial_state=trial_state, kwargs...)
+        Eks[i], logψs[i], samples[i], logpc[i], max_bond[i] = Ek(peps, ham_op; timer=timer, kwargs...)
     end
 
     return Dict(
@@ -77,7 +77,7 @@ end
 # Multi-threaded version
 ################################################################################
 
-function generate_Eks_threaded(peps::AbstractPEPS, ham_op::TensorOperatorSum; timer=TimerOutput(), trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
+function generate_Eks_threaded(peps::AbstractPEPS, ham_op::TensorOperatorSum; timer=TimerOutput(), kwargs...)
     function Eks_(Θ::Vector{T}, sample_nr::Integer; reset_double_layer=true, kwargs2...) where T
         if length(kwargs2) > 0
             kwargs_merged = merge(kwargs, kwargs2)
@@ -96,13 +96,13 @@ function generate_Eks_threaded(peps::AbstractPEPS, ham_op::TensorOperatorSum; ti
         if reset_double_layer
             @timeit timer "double_layer_envs" update_double_layer_envs!(peps)
         end
-        return Eks_threaded(peps, ham_op, sample_nr; timer=timer, trial_state=trial_state, kwargs...)
+        return Eks_threaded(peps, ham_op, sample_nr; timer=timer, kwargs...)
     end
     return Eks_
 end
 
 function Eks_threaded(peps, ham_op, sample_nr; importance_weights=true, seed=nothing,
-                      timer=TimerOutput(), nr_threads=Threads.nthreads(), trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
+                      timer=TimerOutput(), nr_threads=Threads.nthreads(), kwargs...)
     
     if seed !== nothing
         Random.seed!(seed)
@@ -125,7 +125,7 @@ function Eks_threaded(peps, ham_op, sample_nr; importance_weights=true, seed=not
     Threads.@threads for i in 1:nr_threads
         Random.seed!(seed + i)
         for j in 1:k
-            Eks[j, i], logψs[j, i], samples[j, i], logpcs[j, i], max_bonds[j, i] = Ek(peps, ham_op; trial_state=trial_state, kwargs...)
+            Eks[j, i], logψs[j, i], samples[j, i], logpcs[j, i], max_bonds[j, i] = Ek(peps, ham_op; kwargs...)
         end
     end
 
@@ -156,7 +156,7 @@ end
 # Multi-processing version
 ################################################################################
 
-function generate_Eks_multiproc(peps::AbstractPEPS, ham_op::TensorOperatorSum; timer=TimerOutput(), threaded=true, trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
+function generate_Eks_multiproc(peps::AbstractPEPS, ham_op::TensorOperatorSum; timer=TimerOutput(), threaded=true, kwargs...)
     function Eks_(Θ::Vector{T}, sample_nr::Integer; kwargs2...) where T
         if length(kwargs2) > 0
             kwargs_merged = merge(kwargs, kwargs2)
@@ -164,7 +164,7 @@ function generate_Eks_multiproc(peps::AbstractPEPS, ham_op::TensorOperatorSum; t
         end
 
         @timeit timer "double_layer_envs" update_double_layer_envs!(peps)        
-        return @timeit timer "Eks_multiproc" Eks_multiproc(peps, ham_op, sample_nr; timer, trial_state=trial_state, kwargs...)
+        return @timeit timer "Eks_multiproc" Eks_multiproc(peps, ham_op, sample_nr; timer, kwargs...)
     end
     function Eks_(peps_::Parameters{<:AbstractPEPS}, sample_nr::Integer; kwargs2...)
         peps_ = peps_.obj
@@ -175,13 +175,13 @@ function generate_Eks_multiproc(peps::AbstractPEPS, ham_op::TensorOperatorSum; t
             kwargs_merged = merge(kwargs, kwargs2)
             kwargs = kwargs_merged
         end
-        return @timeit timer "Eks_multiproc" Eks_multiproc(peps_, ham_op, sample_nr; timer, trial_state=trial_state, kwargs...)
+        return @timeit timer "Eks_multiproc" Eks_multiproc(peps_, ham_op, sample_nr; timer, kwargs...)
     end
 
     return Eks_
 end
 
-function Eks_multiproc(peps, ham_op, sample_nr; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
+function Eks_multiproc(peps, ham_op, sample_nr;
                        importance_weights=true,
                        n_threads=Distributed.remotecall_fetch(() -> Threads.nthreads(), workers()[1]),
                        timer=TimerOutput(), kwargs...)
@@ -200,7 +200,7 @@ function Eks_multiproc(peps, ham_op, sample_nr; trial_state::AbstractTrialState=
     seed = rand(UInt)
     outs = [
         @timeit timer "remotecall" Distributed.remotecall(
-            () -> Eks_threaded(peps, ham_op, k; importance_weights=false, seed=seed + w, trial_state=trial_state, kwargs...),
+            () -> Eks_threaded(peps, ham_op, k; importance_weights=false, seed=seed + w, kwargs...),
             w
         ) for w in workers()
     ]
