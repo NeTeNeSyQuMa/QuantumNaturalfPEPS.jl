@@ -1330,9 +1330,17 @@ Return a truncated decomposition that removes zero columns from the `Vbar` block
 function truncated_bloch_messiah(Dmat,UVmat,Cmat)
     D,Ubar,Vbar,C = get_mats_from_bloch_messiah(Dmat, UVmat, Cmat)
 
-    # discard numerically zero columns
-    tol = 1e-10
-    zero_ind = findfirst(col -> maximum(abs.(col)) < tol, eachcol(Vbar))
+    # Discard numerically zero columns. The tolerance has to be relative to the largest
+    # column: for a Slater determinant (all pairing amplitudes zero, e.g. a π-flux hopping
+    # state) half the columns of Vbar vanish and their numerical noise floor sits at ~1e-10,
+    # i.e. right on top of an absolute 1e-10 cutoff. A null column then survives truncation,
+    # Q_mat comes out one dimension too large, and pfaffian() returns 0 for *every*
+    # configuration -> logψ = -Inf everywhere -> NaN importance weights.
+    # The absolute value is kept as a floor so that a Vbar that is entirely numerical noise
+    # is still truncated away completely, exactly as before.
+    colmax = [maximum(abs, col) for col in eachcol(Vbar)]
+    tol = max(1e-10, 1e-6 * maximum(colmax))
+    zero_ind = findfirst(<(tol), colmax)
 
     if zero_ind === nothing
         return Dmat, UVmat, Cmat

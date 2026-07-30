@@ -100,6 +100,38 @@ function hamiltonian_hubbard(t, U, Lx, Ly)
     return ham_hubbard
 end
 
+function hamiltonian_hubbard_pi_flux_hopping(t, U, Lx, Ly)
+    ham_hubbard = ITensors.OpSum()
+
+    for i in 1:Lx, j in 1:Ly
+        sign_y = (-1)^i   # Staggered sign for y-direction hopping
+        if j < Ly
+            if t != 0
+                ham_hubbard .+= (-t*sign_y, "Cdag", (i, j),   "C", (i, j+1))
+                ham_hubbard .+= (-t*sign_y, "Cdag", (i, j+1), "C", (i, j))
+            end
+            # V (n_i - 1/2)(n_j - 1/2), constant dropped
+            ham_hubbard .+= ( U, "N", (i, j), "N", (i, j+1))
+            ham_hubbard .+= (-U/2, "N", (i, j))
+            ham_hubbard .+= (-U/2, "N", (i, j+1))
+        end
+
+        if i < Lx
+            if t != 0
+                ham_hubbard .+= (-t, "Cdag", (i, j),   "C", (i+1, j))
+                ham_hubbard .+= (-t, "Cdag", (i+1, j), "C", (i, j))
+            end
+            # V (n_i - 1/2)(n_j - 1/2), constant dropped
+            ham_hubbard .+= ( U, "N", (i, j), "N", (i+1, j))
+            ham_hubbard .+= (-U/2, "N", (i, j))
+            ham_hubbard .+= (-U/2, "N", (i+1, j))
+        end
+
+    end
+    
+    return ham_hubbard
+end
+
 # total number operator
 function build_Ntot_op(Lx::Int, Ly::Int)
     Ntot_op = ITensors.OpSum()

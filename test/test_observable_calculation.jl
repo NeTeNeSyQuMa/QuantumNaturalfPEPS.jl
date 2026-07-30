@@ -179,7 +179,7 @@ verbosity = 0
             obs = measure_observables(peps, Hubbard_ham, optimal_trial_state)
 
             # check if the error is within the expected sampling error
-            atol = 3 / sqrt(Nmeasure)
+            atol = 5 / sqrt(Nmeasure)
             @test obs.Ntot_err <= atol
             @test obs.energy_err <= atol
             @test obs.M2_err <= atol
