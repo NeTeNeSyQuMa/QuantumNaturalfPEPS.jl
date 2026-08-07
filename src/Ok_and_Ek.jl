@@ -84,7 +84,7 @@ function Ek(peps, ham_op; timer=TimerOutput(),
     local E_loc, logψ, max_bond
     if slow_energy
         logψ, env_top, env_down, max_bond = @timeit timer "vertical_envs" get_logψ_and_envs(peps, S, env_top; pos=slow_energy_pos, overwrite) # compute the environments of the peps according to that sample
-        func = get_logψ_function(peps; pos=slow_energy_pos)
+        func = get_logψ_function(peps, trial_state; pos=slow_energy_pos)
         E_loc = convert_if_real(QuantumNaturalGradient.get_Ek(S, ham_op, func))
     else
         logψ, env_top, env_down, max_bond = @timeit timer "vertical_envs" get_logψ_and_envs(peps, S, env_top; overwrite) # compute the environments of the peps according to that sample
