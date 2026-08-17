@@ -46,5 +46,7 @@ export write!, write_Tensor!
 export Ok_and_Ek
 export generate_Oks_and_Eks
 export get_observable
+export triangular_torus_bonds, staggered_pi_flux_hoppings
+export hamiltonian_aux_triangular_torus
 
 end
