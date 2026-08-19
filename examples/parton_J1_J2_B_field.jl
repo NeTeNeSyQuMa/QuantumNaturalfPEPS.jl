@@ -84,30 +84,7 @@ elementary triangle receives half of it. This discrete Landau gauge includes
 the boundary phases required on a torus.
 """
 function monopole_hoppings(Lx, Ly, Q; amplitude=1.0)
-    N = Lx * Ly
-    flux_per_rhombus = 2pi * Q / N
-    hopping = staggered_pi_flux_hoppings(Lx, Ly; amplitude)
-
-    for y in 1:Ly, x in 1:Lx
-        x0, y0 = x - 1, y - 1
-        phases = if y < Ly
-            (
-                -flux_per_rhombus * y0,
-                0.0,
-                -flux_per_rhombus * (y0 + 0.5),
-            )
-        else
-            y_boundary_phase = flux_per_rhombus * Ly * x0
-            (
-                -flux_per_rhombus * y0,
-                y_boundary_phase,
-                y_boundary_phase + flux_per_rhombus / 2,
-            )
-        end
-        hopping[x, y, :] .*= exp.(im .* phases)
-    end
-
-    return hopping, flux_per_rhombus
+    return uniform_flux_staggered_pi_hoppings(Lx, Ly, Q; amplitude)
 end
 
 # K.R = (2pi/3) (2x-y) in the square-grid coordinates used here. Coordinates
@@ -318,10 +295,25 @@ parton_states = (;
     monopole=monopole_state,
 )
 
+# Apply single occupancy and, for the spin-mixing ordered ansatze, restrict the
+# resulting spin wavefunction to the target fixed-magnetization sector. The
+# monopole Hamiltonian conserves Sz, so its separately filled spin blocks
+# already fix Nup and Ndown.
+gutzwiller_states = (;
+    Y=gutzwiller_project(Y_state.occupied_orbitals; Nup),
+    umbrella=gutzwiller_project(umbrella_state.occupied_orbitals; Nup),
+    canted_stripe=gutzwiller_project(canted_stripe_state.occupied_orbitals; Nup),
+    monopole=gutzwiller_project(
+        up_spectrum.vectors[:, 1:Nup],
+        down_spectrum.vectors[:, 1:Ndown],
+    ),
+)
+
 println("Constructed $(length(parton_states)) auxiliary states on the $N-site tilted torus.")
 for (name, state) in pairs(parton_states)
     println("  ", rpad(string(name), 15), " size(Haux) = ", size(state.Haux))
 end
+println("Applied the Gutzwiller projector in the Nup=$Nup, Ndown=$Ndown sector.")
 
 # ---------------------------------------------------------------------------
 # 18x18 staggered-[0, pi] Hofstadter spectrum and Wannier diagram

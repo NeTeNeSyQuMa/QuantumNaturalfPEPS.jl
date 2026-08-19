@@ -22,4 +22,5 @@ end
 # identity state has no variational parameters
 Parameters(Id::IdentityState) = []
 
+include("GutzwillerProjectedState.jl")
 include("GaussianState.jl")

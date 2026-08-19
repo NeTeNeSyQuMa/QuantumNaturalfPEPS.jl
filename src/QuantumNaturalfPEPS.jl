@@ -34,6 +34,7 @@ include("Ek.jl")
 include("Ok_and_Ek.jl")
 include("Observables.jl")
 include("Hamiltonians.jl")
+include("TrialStates/PartonMeanField.jl")
 
 include("Operations/Operations.jl")
 include("Properties/Properties.jl")
@@ -47,6 +48,14 @@ export Ok_and_Ek
 export generate_Oks_and_Eks
 export get_observable
 export triangular_torus_bonds, staggered_pi_flux_hoppings
+export uniform_flux_staggered_pi_hoppings
 export hamiltonian_aux_triangular_torus
+export hamiltonian_J1J2_triangular
+export GutzwillerProjectedState, gutzwiller_project
+export gutzwiller_amplitude, gutzwiller_weight
+export GutzwillerExchangeCache, gutzwiller_exchange_ratio
+export accept_gutzwiller_exchange!
+export PartonMeanFieldResult, parton_density_matrix
+export parton_mean_field_energy, solve_parton_mean_field
 
 end
