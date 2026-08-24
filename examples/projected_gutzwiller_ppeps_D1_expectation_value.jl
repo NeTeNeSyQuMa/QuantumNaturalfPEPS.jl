@@ -60,6 +60,12 @@ learning_rate = parse(Float64, get(ENV, "PPEPS_LR", "0.02"))
 eigenvalue_cutoff = parse(Float64, get(ENV, "PPEPS_EIGENCUT", "1e-4"))
 base_seed = parse(Int, get(ENV, "PPEPS_SEED", "220726"))
 q_grid_size = parse(Int, get(ENV, "PPEPS_Q_GRID_SIZE", "161"))
+monopole_samples = parse(Int, get(ENV, "PPEPS_MONOPOLE_SAMPLES", "5000"))
+monopole_burnin_sweeps = parse(Int, get(ENV, "PPEPS_MONOPOLE_BURNIN_SWEEPS", "20"))
+monopole_moves_per_sample = parse(Int, get(ENV, "PPEPS_MONOPOLE_MOVES_PER_SAMPLE", "324"))
+monopole_block_length = parse(Int, get(ENV, "PPEPS_MONOPOLE_BLOCK_LENGTH", "100"))
+monopole_only = lowercase(strip(get(ENV, "PPEPS_MONOPOLE_ONLY", "false"))) in
+    ("1", "true", "yes")
 
 J1 = parse(Float64, get(ENV, "PPEPS_J1", "1.0"))
 J2 = parse(Float64, get(ENV, "PPEPS_J2", string(J1 / 8)))
@@ -85,6 +91,11 @@ measurement_samples >= 2block_length || error(
 )
 maximum_iterations > 0 || error("PPEPS_MAXITER must be positive")
 moves_per_sample > 0 || error("PPEPS_MOVES_PER_SAMPLE must be positive")
+monopole_samples >= 2monopole_block_length || error(
+    "PPEPS_MONOPOLE_SAMPLES must be at least twice PPEPS_MONOPOLE_BLOCK_LENGTH",
+)
+monopole_burnin_sweeps > 0 || error("PPEPS_MONOPOLE_BURNIN_SWEEPS must be positive")
+monopole_moves_per_sample > 0 || error("PPEPS_MONOPOLE_MOVES_PER_SAMPLE must be positive")
 isodd(q_grid_size) && q_grid_size >= 51 || error(
     "PPEPS_Q_GRID_SIZE must be an odd integer of at least 51",
 )
@@ -137,8 +148,8 @@ function figure2_state_parameters(case, L)
         N % 6 == 0 || error("L=$L is incompatible with phi/(2pi)=1/6")
         return (; magnetization=1 // 3, Q=N ÷ 6, chern=1)
     elseif case == :C2_m1over3
-        N % 12 == 0 || error("L=$L is incompatible with phi/(2pi)=1/12")
-        return (; magnetization=1 // 3, Q=N ÷ 12, chern=2)
+        N % 3 == 0 || error("L=$L is incompatible with phi/(2pi)=1/3")
+        return (; magnetization=1 // 3, Q=N ÷ 3, chern=2)
     elseif case == :C1_m2over3
         N % 3 == 0 || error("L=$L is incompatible with phi/(2pi)=1/3")
         return (; magnetization=2 // 3, Q=N ÷ 3, chern=1)
@@ -190,20 +201,19 @@ function adjacent_monopole_state(L, base_state)
     return (; projected_state, Q, Nup, Ndown, flux, gap_up, gap_down)
 end
 
-function inside_triangular_brillouin_zone(qx, qy)
+function inside_extended_triangular_momentum_zone(qx, qy)
     tolerance = 100eps(Float64)
-    limit = 4pi / sqrt(3)
-    return abs(qy) <= 2pi / sqrt(3) + tolerance &&
-           abs(sqrt(3) * qx + qy) <= limit + tolerance &&
-           abs(sqrt(3) * qx - qy) <= limit + tolerance
+    return abs(qx) <= 2pi + tolerance &&
+           abs(qx + sqrt(3) * qy) <= 4pi + tolerance &&
+           abs(qx - sqrt(3) * qy) <= 4pi + tolerance
 end
 
-function triangular_structure_factor(Cperp_displacement, q_axis)
+function triangular_structure_factor(Cperp_displacement, qx_axis, qy_axis)
     Lx, Ly = size(Cperp_displacement)
     N = Lx * Ly
-    values = fill(NaN, length(q_axis), length(q_axis))
-    for (qx_index, qx) in enumerate(q_axis), (qy_index, qy) in enumerate(q_axis)
-        inside_triangular_brillouin_zone(qx, qy) || continue
+    values = fill(NaN, length(qx_axis), length(qy_axis))
+    for (qx_index, qx) in enumerate(qx_axis), (qy_index, qy) in enumerate(qy_axis)
+        inside_extended_triangular_momentum_zone(qx, qy) || continue
         # Reciprocal phases conjugate to the two integer lattice coordinates.
         kx = qx
         ky = -qx / 2 + sqrt(3) * qy / 2
@@ -228,7 +238,7 @@ end
 
 case_index(case) = findfirst(==(case), available_cases)
 physical_hamiltonians = Dict(
-    L => hamiltonian_J1J2_triangular(
+    L => QuantumNaturalfPEPS.hamiltonian_J1J2_H(
         L,
         L;
         J1,
@@ -237,12 +247,46 @@ physical_hamiltonians = Dict(
         boundary=:periodic,
     ) for L in (12, 18)
 )
-q_axis = collect(range(-2pi, 2pi; length=q_grid_size))
+qx_axis = collect(range(-2pi, 2pi; length=q_grid_size))
+# Match the paper's three-BZ hexagonal plotting domain. Choose an odd number
+# of qy points with nearly the same Cartesian spacing as the qx grid.
+qy_grid_size = 2round(Int, (q_grid_size - 1) / sqrt(3)) + 1
+qy_axis = collect(range(-4pi / sqrt(3), 4pi / sqrt(3); length=qy_grid_size))
+output_directory = joinpath(@__DIR__, "projected_gutzwiller_ppeps_D1_expectation_value")
+mkpath(output_directory)
+data_path = joinpath(output_directory, "transverse_correlations_D1.jld2")
+replot_only = lowercase(strip(get(ENV, "PPEPS_REPLOT_ONLY", "false"))) in
+    ("1", "true", "yes")
+replot_only && monopole_only && error(
+    "PPEPS_REPLOT_ONLY and PPEPS_MONOPOLE_ONLY cannot both be enabled",
+)
 
+if replot_only
+    isfile(data_path) || error("cannot replot: data file does not exist at $data_path")
+    stored_data = JLD2.load(data_path)
+    records = stored_data["records"]
+    parameters = stored_data["parameters"]
+    monopole_record = stored_data["monopole_record"]
+    records = [
+        merge(record, (; Cperp_q=triangular_structure_factor(
+            record.Cperp_displacement,
+            qx_axis,
+            qy_axis,
+        ))) for record in records
+    ]
+    println("Loaded saved QNG/PPEPS measurements from: $data_path")
+else
+existing_data = (monopole_only || length(selected_cases) < length(available_cases)) &&
+                isfile(data_path) ?
+    JLD2.load(data_path) : nothing
+monopole_only && isnothing(existing_data) && error(
+    "PPEPS_MONOPOLE_ONLY requires existing Figure-2 data at $data_path",
+)
 records = NamedTuple[]
+if !monopole_only
 for case in selected_cases, L in (12, 18)
     state = projected_flux_state(L, case)
-    peps = identity_D1_peps(L, L)
+    local peps = identity_D1_peps(L, L)
     seed = base_seed + 10_000L + 1_000case_index(case)
     Oks_and_Eks = generate_Oks_and_Eks(
         peps,
@@ -289,7 +333,7 @@ for case in selected_cases, L in (12, 18)
     Cperp_reference_error = reshape(copy(measurement[:Cperp_reference_error]), L, L)
     Cperp_displacement = copy(measurement[:Cperp_displacement])
     Cperp_displacement_error = copy(measurement[:Cperp_displacement_error])
-    Cperp_q = triangular_structure_factor(Cperp_displacement, q_axis)
+    Cperp_q = triangular_structure_factor(Cperp_displacement, qx_axis, qy_axis)
     energy = blocked_energy_statistics(measurement[:Eks], block_length)
     N = L^2
 
@@ -328,38 +372,39 @@ for case in selected_cases, L in (12, 18)
         "$(round(measurement_seconds; digits=2)) s",
     )
 end
+end
 
-# Figure 2(a): inserting one flux quantum into the |C|=1, m=1/3 state pumps
-# one unit of Sz. Measure <n+1|P S_i^+ P|n>/<n|P|n> with synchronized Markov
-# chains in the two flux sectors. The QNG-optimized D=1 weights of |n> dress
-# both sectors, so their relative normalization remains fixed.
-monopole_record = nothing
-if :C1_m1over3 in selected_cases
+# Figure 2(a): inserting one flux quantum into the bare |C|=1, m=2/3 state
+# pumps one unit of Sz. Measure <n+1|P S_i^+ P|n>/<n|P|n> with synchronized
+# Markov chains in the two flux sectors. Identity D=1 weights reproduce the
+# bare Gutzwiller-projected state used in the paper.
+monopole_record = isnothing(existing_data) ? nothing : existing_data["monopole_record"]
+if monopole_only || :C1_m2over3 in selected_cases
     L = 18
-    base_state = projected_flux_state(L, :C1_m1over3)
+    base_state = projected_flux_state(L, :C1_m2over3)
     target_state = adjacent_monopole_state(L, base_state)
-    optimized_record = only(filter(
-        record -> record.case == :C1_m1over3 && record.L == L,
-        records,
-    ))
-    peps = identity_D1_peps(L, L)
+    monopole_peps = identity_D1_peps(L, L)
+    identity_parameters = vec(monopole_peps)
     monopole_callback = generate_Oks_and_Eks(
-        peps,
+        monopole_peps,
         physical_hamiltonians[L];
         trial_state=base_state.projected_state,
         fixed_sz_metropolis=true,
-        burnin_sweeps,
-        moves_per_sample,
+        burnin_sweeps=monopole_burnin_sweeps,
+        moves_per_sample=monopole_moves_per_sample,
         seed=base_seed + 990_018,
     )
     local monopole_measurement
-    println("Measuring the Q -> Q+1 monopole matrix element on 18x18 ...")
+    println(
+        "Measuring the bare m=2/3, Q -> Q+1 monopole matrix element on 18x18 " *
+        "with $monopole_samples samples ...",
+    )
     monopole_seconds = @elapsed begin
         monopole_measurement = monopole_callback(
-            optimized_record.trained_parameters,
-            measurement_samples;
+            identity_parameters,
+            monopole_samples;
             monopole_state=target_state.projected_state,
-            transverse_block_length=block_length,
+            transverse_block_length=monopole_block_length,
         )
     end
     matrix_element = reshape(
@@ -374,6 +419,9 @@ if :C1_m1over3 in selected_cases
     )
     monopole_record = (;
         L,
+        magnetization=2 // 3,
+        chern=1,
+        dressing=:identity_D1,
         base_Q=base_state.Q,
         target_Q=target_state.Q,
         base_Nup=base_state.Nup,
@@ -384,6 +432,10 @@ if :C1_m1over3 in selected_cases
         target_gap_down=target_state.gap_down,
         matrix_element,
         matrix_element_error,
+        samples=monopole_samples,
+        burnin_sweeps=monopole_burnin_sweeps,
+        moves_per_sample=monopole_moves_per_sample,
+        block_length=monopole_block_length,
         acceptance=monopole_measurement[:acceptance],
         measurement_seconds=monopole_seconds,
     )
@@ -393,35 +445,71 @@ if :C1_m1over3 in selected_cases
     )
 end
 
-output_directory = joinpath(@__DIR__, "projected_gutzwiller_ppeps_D1_figure2_qng")
-mkpath(output_directory)
-data_path = joinpath(output_directory, "figure2_transverse_correlations_qng_D1.jld2")
-parameters = (;
-    method=:projected_gutzwiller_qng_D1,
-    selected_cases,
-    real_space_size=12,
-    momentum_space_size=18,
-    qng_samples,
-    measurement_samples,
-    burnin_sweeps,
-    moves_per_sample,
-    block_length,
-    maximum_iterations,
-    learning_rate,
-    eigenvalue_cutoff,
-    base_seed,
-    q_grid_size,
-    q_axis,
-    J1,
-    J2,
-    field,
-    closed_shell_tolerance,
-)
-JLD2.jldsave(data_path; records, parameters, monopole_record)
+if !isnothing(existing_data)
+    if monopole_only
+        records = existing_data["records"]
+    else
+        retained_records = filter(
+            record -> !(record.case in selected_cases),
+            existing_data["records"],
+        )
+        records = vcat(retained_records, records)
+    end
+end
+sort!(records; by=record -> (case_index(record.case), record.L))
+if !monopole_only
+    records = [
+        merge(record, (; Cperp_q=triangular_structure_factor(
+            record.Cperp_displacement,
+            qx_axis,
+            qy_axis,
+        ))) for record in records
+    ]
+end
+saved_cases = [case for case in available_cases if any(record -> record.case == case, records)]
 
-length(selected_cases) == length(available_cases) || begin
+monopole_parameters = (;
+    monopole_samples,
+    monopole_burnin_sweeps,
+    monopole_moves_per_sample,
+    monopole_block_length,
+    monopole_magnetization=2 // 3,
+    monopole_dressing=:identity_D1,
+)
+parameters = if monopole_only
+    merge(existing_data["parameters"], monopole_parameters)
+else
+    (;
+        method=:projected_gutzwiller_qng_D1,
+        selected_cases=saved_cases,
+        real_space_size=12,
+        momentum_space_size=18,
+        qng_samples,
+        measurement_samples,
+        burnin_sweeps,
+        moves_per_sample,
+        block_length,
+        maximum_iterations,
+        learning_rate,
+        eigenvalue_cutoff,
+        base_seed,
+        q_grid_size,
+        qx_axis,
+        qy_axis,
+        J1,
+        J2,
+        field,
+        closed_shell_tolerance,
+        monopole_parameters...,
+    )
+end
+JLD2.jldsave(data_path; records, parameters, monopole_record)
+end
+
+saved_cases = [case for case in available_cases if any(record -> record.case == case, records)]
+length(saved_cases) == length(available_cases) || begin
     println("Saved partial data to: $data_path")
-    println("Skipping the composite plot because only $(selected_cases) were requested.")
+    println("Skipping the composite plot because the saved data contain only $(saved_cases).")
     exit()
 end
 
@@ -430,7 +518,7 @@ monopole_axis = Axis(
     monopole_figure[1, 1];
     xlabel=L"x",
     ylabel=L"y",
-    title=L"\langle S_i^+\rangle_{\mathrm{mono}}\quad (Q\rightarrow Q+1)",
+    title=L"\langle S_i^+\rangle_{\mathrm{mono}},\quad |C|=1,\ m=2/3\quad (Q\rightarrow Q+1)",
     aspect=DataAspect(),
 )
 monopole_values = vec(monopole_record.matrix_element)
@@ -450,7 +538,9 @@ monopole_plot = scatter!(
     y_positions;
     color=relative_phases,
     colorrange=(-pi, pi),
-    colormap=:hsv,
+    # The cyclic vikO map has the same blue-white-orange-red phase ordering
+    # used in the publication, with identical colors at -pi and +pi.
+    colormap=:vikO,
     markersize=6 .+ 18 .* sqrt.(magnitudes ./ maximum_magnitude),
     strokecolor=(:black, 0.5),
     strokewidth=0.4,
@@ -463,10 +553,14 @@ Colorbar(
 )
 xlims!(monopole_axis, -0.7, 26.2)
 ylims!(monopole_axis, -0.7, 17.7)
-monopole_pdf_path = joinpath(output_directory, "figure2a_monopole_qng_D1.pdf")
-monopole_png_path = joinpath(output_directory, "figure2a_monopole_qng_D1.png")
+monopole_pdf_path = joinpath(output_directory, "monopole_matrix_elem_D1.pdf")
 save(monopole_pdf_path, monopole_figure)
-save(monopole_png_path, monopole_figure; px_per_unit=1.5)
+
+if monopole_only
+    println("Updated monopole data in: $data_path")
+    println("Saved monopole plot to: $monopole_pdf_path")
+    exit()
+end
 
 record_for(case, L) = only(filter(record -> record.case == case && record.L == L, records))
 case_titles = Dict(
@@ -474,6 +568,18 @@ case_titles = Dict(
     :C1_m1over3 => L"|C|=1,\quad m=1/3",
     :C2_m1over3 => L"|C|=2,\quad m=1/3",
     :C1_m2over3 => L"|C|=1,\quad m=2/3",
+)
+momentum_color_ranges = Dict(
+    :fermi_pocket => (0.15, 1.30),
+    :C1_m1over3 => (0.15, 4.20),
+    :C2_m1over3 => (0.15, 3.20),
+    :C1_m2over3 => (0.15, 4.60),
+)
+momentum_color_ticks = Dict(
+    :fermi_pocket => collect(0.25:0.25:1.25),
+    :C1_m1over3 => collect(1.0:1.0:4.0),
+    :C2_m1over3 => collect(1.0:1.0:3.0),
+    :C1_m2over3 => collect(1.0:1.0:4.0),
 )
 
 figure = Figure(size=(1650, 1900))
@@ -504,7 +610,7 @@ for (row, case) in enumerate(available_cases)
         real_y_positions;
         color=colors,
         colorrange=(-0.15, 0.15),
-        colormap=:balance,
+        colormap=[:blue, :white, :red],
         markersize=16,
         strokecolor=(:black, 0.35),
         strokewidth=0.35,
@@ -522,14 +628,12 @@ for (row, case) in enumerate(available_cases)
         xticks=([-2pi, -pi, 0, pi, 2pi], [L"-2\pi", L"-\pi", L"0", L"\pi", L"2\pi"]),
         yticks=([-2pi, -pi, 0, pi, 2pi], [L"-2\pi", L"-\pi", L"0", L"\pi", L"2\pi"]),
     )
-    finite_Cq = filter(isfinite, vec(momentum_record.Cperp_q))
-    color_limits = (max(0.0, minimum(finite_Cq)), maximum(finite_Cq))
     momentum_plot = heatmap!(
         momentum_axis,
-        q_axis,
-        q_axis,
+        qx_axis,
+        qy_axis,
         momentum_record.Cperp_q;
-        colorrange=color_limits,
+        colorrange=momentum_color_ranges[case],
         colormap=:viridis,
     )
     push!(momentum_heatmaps, momentum_plot)
@@ -537,13 +641,18 @@ for (row, case) in enumerate(available_cases)
     bz_y = [0, 2pi / sqrt(3), 2pi / sqrt(3), 0, -2pi / sqrt(3), -2pi / sqrt(3), 0]
     lines!(momentum_axis, bz_x, bz_y; color=:red, linewidth=2)
     xlims!(momentum_axis, -2pi, 2pi)
-    ylims!(momentum_axis, -2pi, 2pi)
-    Colorbar(figure[row, 4], momentum_plot; label=L"C^\perp(\mathbf q)")
+    ylims!(momentum_axis, -4pi / sqrt(3), 4pi / sqrt(3))
+    Colorbar(
+        figure[row, 4],
+        momentum_plot;
+        label=L"C^\perp(\mathbf q)",
+        ticks=momentum_color_ticks[case],
+    )
 end
 
 Label(
     figure[0, 1:4],
-    "QNG-optimized projected Gutzwiller + D=1 PPEPS: Figure 2(b-i) analogue, " *
+    "QNG-optimized projected Gutzwiller + D=1 PPEPS, " *
     "J2/J1=$(round(J2 / J1; digits=3))";
     fontsize=27,
 )
@@ -551,13 +660,12 @@ colgap!(figure.layout, 1, 15)
 colgap!(figure.layout, 2, 35)
 colgap!(figure.layout, 3, 15)
 
-pdf_path = joinpath(output_directory, "figure2_transverse_correlations_qng_D1.pdf")
-png_path = joinpath(output_directory, "figure2_transverse_correlations_qng_D1.png")
+pdf_path = joinpath(output_directory, "transverse_correlations_qng_D1.pdf")
 save(pdf_path, figure)
-save(png_path, figure; px_per_unit=1.5)
 
-println("Saved QNG/PPEPS Figure-2 data to: $data_path")
+println(
+    replot_only ? "Used QNG/PPEPS Figure-2 data from: $data_path" :
+    "Saved QNG/PPEPS Figure-2 data to: $data_path",
+)
 println("Saved monopole plot to: $monopole_pdf_path")
-println("Saved monopole preview to: $monopole_png_path")
 println("Saved Figure-2 plot to: $pdf_path")
-println("Saved Figure-2 preview to: $png_path")

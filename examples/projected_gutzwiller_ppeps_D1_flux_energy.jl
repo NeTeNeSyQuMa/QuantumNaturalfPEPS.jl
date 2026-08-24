@@ -144,7 +144,7 @@ function flux_state(L, Q, magnetization; gap_tolerance=closed_shell_tolerance)
 end
 
 physical_hamiltonians = Dict(
-    L => hamiltonian_J1J2_triangular(
+    L => hamiltonian_J1J2_H(
         L,
         L;
         J1,
@@ -250,7 +250,7 @@ isempty(records) && error("no closed-shell flux points were found")
 
 output_directory = joinpath(
     @__DIR__,
-    "projected_gutzwiller_ppeps_D1_flux_energy_plots" * output_suffix,
+    "projected_gutzwiller_ppeps_D1_flux_energy" * output_suffix,
 )
 mkpath(output_directory)
 data_path = joinpath(output_directory, "flux_energy_data.jld2")
