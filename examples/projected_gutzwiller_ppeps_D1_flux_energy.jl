@@ -325,10 +325,7 @@ Label(
 )
 
 pdf_path = joinpath(output_directory, "flux_energy_m_1over3_2over3.pdf")
-png_path = joinpath(output_directory, "flux_energy_m_1over3_2over3.png")
 save(pdf_path, figure)
-save(png_path, figure; px_per_unit=2)
 
 println("Saved QNG/PPEPS data to: $data_path")
 println("Saved flux-energy plot to: $pdf_path")
-println("Saved flux-energy preview to: $png_path")
