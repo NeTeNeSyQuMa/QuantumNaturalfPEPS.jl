@@ -191,103 +191,112 @@ build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, N::Int) = build_general_
 """
     build_general_H_BdG_2D_NN_fixed_parton_flavour(η, Lx, Ly, n_flavours)
 
-Function that builds a general mean-field Bogoliubov-de Gennes Hamiltonian matrix with nearest-neighbor (NN) hopping 
+Function that builds a general mean-field Bogoliubov-de Gennes Hamiltonian matrix with nearest-neighbor (NN) hopping
 and pairing terms for a given parton flavour number by fixing the flavour sector.
 This function should be used, when a parton description of a spin lattice model is wanted with a fixed flavour sector.
 
-So for a spin-S system on a `L = Lx * Ly` lattice, the number of parton species is `n_flavours = 2S+1` and the 
-number of interleaved lattice sites is `N = n_flavours * Lx * Ly`.
+For a spin-S system on an `L = Lx * Ly` lattice the number of parton species is `n_flavours = 2S+1`.
+The partons of a site are interleaved **along x**, i.e. the parton mode index runs flavour-fastest,
+then x, then y. The interleaved parton lattice is therefore
+
+    Nx = n_flavours * Lx,    Ny = Ly,    N = Nx * Ny = n_flavours * L
+
+Only the x-direction is stretched by the flavours. Throughout, `Lx`/`Ly` denote the original (spin)
+lattice and `Nx`/`Ny` the interleaved parton lattice.
+
+The variational parameters live on the *original* lattice: every site carries `n_flavours` on-site
+potentials and every NN bond of the spin lattice carries `n_flavours` hoppings and `n_flavours`
+pairings (see `get_max_num_MF_params_NN_parton`), so `η` is indexed with `Lx`, `Ly` — not `Nx`, `Ny`.
 
 This function sets all matrix elements to zero, that changes the total flavour count of the system.
 
 Example (spin-1/2 system):
 - the term `c†_{i,↑} c_{j,↓}` is not allowed, because it changes the total Sz by 1 (from ↓=0 to ↑=1)
 
-# Note 
-This only makes the flavour sector *sharp*. 
-On **which** sector you land in is set by the quasiparticle occupation reference (`occ_ref`/`target_state` in `get_Γ_from_H_BdG`).
+# Arguments
+- `η::AbstractVector{<:Number}`: The vector of variational parameters used to construct H_BdG, which can be optimized during the training process.
+- `Lx::Int`: The number of lattice sites in the x-direction of the original lattice (spin model).
+- `Ly::Int`: The number of lattice sites in the y-direction of the original lattice (spin model).
+- `n_flavours::Int`: The number of parton flavours.
 
 # Returns
-- `H_BdG::Hermitian`: `[T D; D' -Tᵀ]`, with size `(2N, 2N)`.
+- `H_BdG::Hermitian`: `[T D; D' -Tᵀ]`, with size `(2N, 2N)` and `N = n_flavours * Lx * Ly`.
+
+# Note
+This only makes the flavour sector *sharp*.
+On **which** sector you land in is set by the quasiparticle occupation reference (`occ_ref`/`target_state` in `get_Γ_from_H_BdG`).
+
 """
 function build_general_H_BdG_2D_NN_fixed_parton_flavour(η::AbstractVector{<:Number}, Lx::Int, Ly::Int, n_flavours::Int)
-    nf = n_flavours
-    L = Lx * Ly
-    N = nf * L
+    L = Lx * Ly              # sites of the original (spin) lattice
+    Nx = n_flavours * Lx     # interleaved parton lattice: the flavours unfold along x only
+    Ny = Ly
+    N = Nx * Ny              # = n_flavours * L parton modes
     Tη = eltype(η)
     z = zero(Tη)
 
-    @assert nf >= 1 "n_flavours must be >= 1 (n_flavours = 2S+1)"
-    @assert length(η) == get_max_num_MF_params_NN_parton(Lx, Ly, nf) "Length of η ($(length(η))) must equal the number of Sz-conserving mean-field parameters ($(get_max_num_MF_params_NN_parton(Lx, Ly, nf))) for Lx=$Lx, Ly=$Ly, n_flavours=$nf"
+    @assert n_flavours >= 1 "n_flavours must be >= 1 (n_flavours = 2S+1)"
+    @assert length(η) == get_max_num_MF_params_NN_parton(Lx, Ly, n_flavours) "Length of η ($(length(η))) must equal the number of Sz-conserving mean-field parameters ($(get_max_num_MF_params_NN_parton(Lx, Ly, n_flavours))) for Lx=$Lx, Ly=$Ly, n_flavours=$n_flavours"
 
-    n_bx = get_max_num_hopping_x_NN(Lx, Ly)   # number of x bonds
-    n_by = get_max_num_hopping_y_NN(Lx, Ly)   # number of y bonds
-    n_op = nf ÷ 2                             # Sz-neutral flavour pairs available on a single site
+    n_bx = get_max_num_hopping_x_NN(Lx, Ly)   # x bonds of the original lattice
+    n_by = get_max_num_hopping_y_NN(Lx, Ly)   # y bonds of the original lattice
 
     # offsets into η for each parameter block
     o_hx = N
-    o_hy = o_hx + nf * n_bx
-    o_p0 = o_hy + nf * n_by
-    o_px = o_p0 + n_op * L
-    o_py = o_px + nf * n_bx
+    o_hy = o_hx + n_flavours * n_bx
+    o_px = o_hy + n_flavours * n_by
+    o_py = o_px + n_flavours * n_bx
 
     # site i -> x-bond number, valid whenever the bond does not cross the boundary (i % Lx != 0)
     xbond(i) = i - div(i, Lx)
 
-    # column offset of the Sz-partner flavour f2 = nf + 1 - f1 relative to f1, within one site
-    Δf(f1) = nf + 1 - 2 * f1
+    # column offset of the Sz-partner flavour f2 = n_flavours + 1 - f1 relative to f1, within one site
+    Δf(f1) = n_flavours + 1 - 2 * f1
 
     # A band that would run off the matrix carries no bond at all — this happens on degenerate
     # lattices (Ly == 1 has no y bonds, so the y diagonals sit at offset >= N).
     band(o, v) = (abs(o) < N && !isempty(v)) ? diagm(N, N, o => v) : zeros(Tη, N, N)
 
     # ---- T: on-site potentials + flavour-diagonal hopping -------------------------------------
-    # Modes m and m + nf are the same flavour on x-neighbouring sites, and m and m + nf*Lx the same
-    # flavour on y-neighbouring sites, so these two diagonals are exactly the allowed hoppings —
+    # Modes m and m + n_flavours are the same flavour on x-neighbouring sites, and m and m + Nx the
+    # same flavour on y-neighbouring sites, so these two diagonals are exactly the allowed hoppings —
     # the flavour rule is built into the choice of offset. Only the boundary-crossing x bonds
     # (every Lx-th) still have to be dropped, as in `build_general_H_BdG_2D_NN`.
     μs = η[1:N]
 
-    hop_x = [ let i = parton_site(p, nf), f = parton_flavour(p, nf)
-                  i % Lx == 0 ? z : η[o_hx + (xbond(i) - 1) * nf + f]
-              end for p in 1:(N - nf) ]
+    hop_x = [ let i = parton_site(p, n_flavours), f = parton_flavour(p, n_flavours)
+                  i % Lx == 0 ? z : η[o_hx + (xbond(i) - 1) * n_flavours + f]
+              end for p in 1:(N - n_flavours) ]
 
-    hop_y = [ η[o_hy + p] for p in 1:(N - nf * Lx) ]
+    hop_y = [ η[o_hy + p] for p in 1:(N - Nx) ]
 
     T = band(0, μs) +
-        band(nf, hop_x)      + band(-nf, conj.(hop_x)) +
-        band(nf * Lx, hop_y) + band(-(nf * Lx), conj.(hop_y))
+        band(n_flavours, hop_x) + band(-n_flavours, conj.(hop_x)) +
+        band(Nx, hop_y)         + band(-Nx, conj.(hop_y))
 
     # ---- D: Sz-neutral pairing (antisymmetric: D[m,m'] = -D[m',m]) ----------------------------
-    # Pairing (i,f1)-(j,f2) with f2 = nf + 1 - f1 sits on the diagonal at offset `bond_offset + Δf(f1)`,
-    # one diagonal per f1. Different f1 (and on-site vs bond) can share an offset, but never a row,
-    # because each contribution is masked to rows of its own flavour — so summing them is exact.
+    # Pairing (i,f1)-(j,f2) with f2 = n_flavours + 1 - f1 sits on the diagonal at offset `bond_offset + Δf(f1)`,
+    # one diagonal per f1. Different f1 (and the x- vs the y-bond) can share an offset, but never a
+    # row, because each contribution is masked to rows of its own flavour — so summing them is exact.
+    # On-site pairing is deliberately not part of the ansatz.
     antidiag(o, v) = band(o, -v) + band(-o, v)
 
-    # on-site pairing (i,f1)-(i,f2), f1 < f2 only (the reverse is fixed by antisymmetry)
-    D_onsite = sum(
-        antidiag(Δf(f1),
-                 [ parton_flavour(p, nf) == f1 ?
-                       η[o_p0 + (parton_site(p, nf) - 1) * n_op + f1] : z
-                   for p in 1:(N - Δf(f1)) ])
-        for f1 in 1:n_op; init = zeros(Tη, N, N))
-
     D_x = sum(
-        antidiag(nf + Δf(f1),
-                 [ let i = parton_site(p, nf)
-                       (parton_flavour(p, nf) == f1 && i % Lx != 0) ?
-                           η[o_px + (xbond(i) - 1) * nf + f1] : z
-                   end for p in 1:(N - nf - Δf(f1)) ])
-        for f1 in 1:nf; init = zeros(Tη, N, N))
+        antidiag(n_flavours + Δf(f1),
+                 [ let i = parton_site(p, n_flavours)
+                       (parton_flavour(p, n_flavours) == f1 && i % Lx != 0) ?
+                           η[o_px + (xbond(i) - 1) * n_flavours + f1] : z
+                   end for p in 1:(N - n_flavours - Δf(f1)) ])
+        for f1 in 1:n_flavours; init = zeros(Tη, N, N))
 
     D_y = sum(
-        antidiag(nf * Lx + Δf(f1),
-                 [ parton_flavour(p, nf) == f1 ?
-                       η[o_py + (parton_site(p, nf) - 1) * nf + f1] : z
-                   for p in 1:(N - nf * Lx - Δf(f1)) ])
-        for f1 in 1:nf; init = zeros(Tη, N, N))
+        antidiag(Nx + Δf(f1),
+                 [ parton_flavour(p, n_flavours) == f1 ?
+                       η[o_py + (parton_site(p, n_flavours) - 1) * n_flavours + f1] : z
+                   for p in 1:(N - Nx - Δf(f1)) ])
+        for f1 in 1:n_flavours; init = zeros(Tη, N, N))
 
-    D = D_onsite + D_x + D_y
+    D = D_x + D_y
 
     H_BdG = Matrix{Tη}([T D; D' -transpose(T)])
     return Hermitian(H_BdG)
@@ -306,22 +315,25 @@ get_max_num_hopping_y_NN(Lx::Int, Ly::Int) = Lx * (Ly - 1)
 
 Number of free mean-field parameters of `build_general_H_BdG_2D_NN_fixed_parton_flavour`:
 
-- Per parton: `n_flavours` (one on-site potential). 
-- Per NN bond: `n_flavours` hoppings (one per flavour) and `n_flavours` flavour-neutral pairings. 
-- Per site: `n_flavours ÷ 2` on-site flavour-neutral pairings.
-    Example (spin-1/2 system):
-    `n_flavours = 2` -> on-site flavour-neutral pairings = Δ_{↑↓} = -Δ_{↓↑}, (n_flavours ÷ 2) = 1.
+- Per parton: `n_flavours` (one on-site potential).
+- Per NN bond: `n_flavours` hoppings (one per flavour) and `n_flavours` flavour-neutral pairings.
 
-    Example (spin-1 system):
-    `n_flavours = 3` -> on-site flavour-neutral pairings = Δ_{+1 -1} = -Δ_{-1 +1}, (n_flavours ÷ 2) = 1.
+On-site pairing is not part of the ansatz, so there are no per-site pairing parameters.
 
+Sites and bonds are counted on the **original** (spin) lattice `Lx * Ly`, not on the interleaved
+parton lattice — the flavour multiplicity is already contained in the per-flavour counts above.
 At `n_flavours = 1` this reduces exactly to `get_max_num_MF_params_NN(Lx, Ly)`.
+
+# Arguments
+- `Lx::Int`: The number of lattice sites in the x-direction of the original lattice (spin model)
+- `Ly::Int`: The number of lattice sites in the y-direction of the original lattice (spin model)
+- `n_flavours::Int`: Number of parton flavours (2S+1 for spin-S systems)
 """
 function get_max_num_MF_params_NN_parton(Lx::Int, Ly::Int, n_flavours::Int)
-    N = Lx * Ly
+    L = Lx * Ly
     n_bonds = get_max_num_hopping_x_NN(Lx, Ly) + get_max_num_hopping_y_NN(Lx, Ly)
 
-    return N * (n_flavours + (n_flavours ÷ 2)) + 2 * n_flavours * n_bonds
+    return L * n_flavours + 2 * n_flavours * n_bonds
 end
 
 """
