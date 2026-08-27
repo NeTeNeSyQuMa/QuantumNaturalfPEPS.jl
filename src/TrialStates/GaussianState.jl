@@ -83,16 +83,19 @@ mutable struct GaussianState <: AbstractTrialState
     N::Int # number of sites
     parity_sector::Int # parity sector of the state: either 0 (even) or 1 (odd)
     target_state::Int # ground state (0), first excited state (1) and so on up to the Nth mode
+    target_Sz::Union{Nothing, Float64} # flavour (Sz) sector to hold fixed; `nothing` fills by mode index instead
+    n_flavours::Int # parton species per lattice site (2S+1); only meaningful together with target_Sz
     occ_ref::Vector{Int} # quasiparticle occupation reference. Important for selecting the correct Bogoliubov vacuum in Bloch-Messiah decomposition.
     slater_loggrad_cache::SlaterLogGradientCache # Cache for efficient gradient calculations in Slater determinant states
     amplitude_cache::GaussianAmplitudeCache # Cache for efficient amplitude calculations
 
-    function GaussianState(H_BdG_func::Function, N::Int; η=Float64[], parity_sector::Int=0, target_state::Int=0)
+    function GaussianState(H_BdG_func::Function, N::Int; η=Float64[], parity_sector::Int=0, target_state::Int=0,
+                           target_Sz=nothing, n_flavours::Int=1)
         @assert parity_sector == 0 || parity_sector == 1 "Parity must be either 0 (even) or 1 (odd)"
-        Γ, occ_ref = get_Γ_from_H_BdG(H_BdG_func(η, N), parity_sector; target_state=target_state)
-        slater_loggrad_cache = build_slater_loggradient_cache(H_BdG_func, η, N; parity_sector=parity_sector, target_state=target_state)
+        Γ, occ_ref = get_Γ_from_H_BdG(H_BdG_func(η, N), parity_sector; target_state=target_state, target_Sz=target_Sz, n_flavours=n_flavours)
+        slater_loggrad_cache = build_slater_loggradient_cache(H_BdG_func, η, N; parity_sector=parity_sector, target_state=target_state, target_Sz=target_Sz, n_flavours=n_flavours)
         amplitude_cache = build_amplitude_cache(H_BdG_func(η, N), parity_sector, occ_ref)
-        new(Γ, H_BdG_func, η, N, parity_sector, target_state, occ_ref, slater_loggrad_cache, amplitude_cache)
+        new(Γ, H_BdG_func, η, N, parity_sector, target_state, target_Sz, n_flavours, occ_ref, slater_loggrad_cache, amplitude_cache)
     end
 end
 getParity(GS::GaussianState) = Int(sign(real(pfaffian(2 * GS.Γ)))) == 1 ? 0 : 1
@@ -111,8 +114,8 @@ Updates the variational parameters `η` of the Gaussian state `GS` and recompute
 """
 function write!(GS::GaussianState, η::AbstractVector{<:Number})
     GS.η = η
-    GS.Γ, GS.occ_ref = get_Γ_from_H_BdG(GS.H_BdG_func(η, GS.N), GS.parity_sector; target_state=GS.target_state)
-    GS.slater_loggrad_cache = build_slater_loggradient_cache(GS.H_BdG_func, η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state)
+    GS.Γ, GS.occ_ref = get_Γ_from_H_BdG(GS.H_BdG_func(η, GS.N), GS.parity_sector; target_state=GS.target_state, target_Sz=GS.target_Sz, n_flavours=GS.n_flavours)
+    GS.slater_loggrad_cache = build_slater_loggradient_cache(GS.H_BdG_func, η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state, target_Sz=GS.target_Sz, n_flavours=GS.n_flavours)
     GS.amplitude_cache = build_amplitude_cache(GS.H_BdG_func(η, GS.N), GS.parity_sector, GS.occ_ref)
 end
 
@@ -185,10 +188,141 @@ function build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, Lx::Int, Ly::In
 end
 build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, N::Int) = build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, Int(sqrt(N)), Int(sqrt(N)))
 
+"""
+    build_general_H_BdG_2D_NN_fixed_parton_flavour(η, Lx, Ly, n_flavours)
+
+Function that builds a general mean-field Bogoliubov-de Gennes Hamiltonian matrix with nearest-neighbor (NN) hopping 
+and pairing terms for a given parton flavour number by fixing the flavour sector.
+This function should be used, when a parton description of a spin lattice model is wanted with a fixed flavour sector.
+
+So for a spin-S system on a `L = Lx * Ly` lattice, the number of parton species is `n_flavours = 2S+1` and the 
+number of interleaved lattice sites is `N = n_flavours * Lx * Ly`.
+
+This function sets all matrix elements to zero, that changes the total flavour count of the system.
+
+Example (spin-1/2 system):
+- the term `c†_{i,↑} c_{j,↓}` is not allowed, because it changes the total Sz by 1 (from ↓=0 to ↑=1)
+
+# Note 
+This only makes the flavour sector *sharp*. 
+On **which** sector you land in is set by the quasiparticle occupation reference (`occ_ref`/`target_state` in `get_Γ_from_H_BdG`).
+
+# Returns
+- `H_BdG::Hermitian`: `[T D; D' -Tᵀ]`, with size `(2N, 2N)`.
+"""
+function build_general_H_BdG_2D_NN_fixed_parton_flavour(η::AbstractVector{<:Number}, Lx::Int, Ly::Int, n_flavours::Int)
+    nf = n_flavours
+    L = Lx * Ly
+    N = nf * L
+    Tη = eltype(η)
+    z = zero(Tη)
+
+    @assert nf >= 1 "n_flavours must be >= 1 (n_flavours = 2S+1)"
+    @assert length(η) == get_max_num_MF_params_NN_parton(Lx, Ly, nf) "Length of η ($(length(η))) must equal the number of Sz-conserving mean-field parameters ($(get_max_num_MF_params_NN_parton(Lx, Ly, nf))) for Lx=$Lx, Ly=$Ly, n_flavours=$nf"
+
+    n_bx = get_max_num_hopping_x_NN(Lx, Ly)   # number of x bonds
+    n_by = get_max_num_hopping_y_NN(Lx, Ly)   # number of y bonds
+    n_op = nf ÷ 2                             # Sz-neutral flavour pairs available on a single site
+
+    # offsets into η for each parameter block
+    o_hx = N
+    o_hy = o_hx + nf * n_bx
+    o_p0 = o_hy + nf * n_by
+    o_px = o_p0 + n_op * L
+    o_py = o_px + nf * n_bx
+
+    # site i -> x-bond number, valid whenever the bond does not cross the boundary (i % Lx != 0)
+    xbond(i) = i - div(i, Lx)
+
+    # column offset of the Sz-partner flavour f2 = nf + 1 - f1 relative to f1, within one site
+    Δf(f1) = nf + 1 - 2 * f1
+
+    # A band that would run off the matrix carries no bond at all — this happens on degenerate
+    # lattices (Ly == 1 has no y bonds, so the y diagonals sit at offset >= N).
+    band(o, v) = (abs(o) < N && !isempty(v)) ? diagm(N, N, o => v) : zeros(Tη, N, N)
+
+    # ---- T: on-site potentials + flavour-diagonal hopping -------------------------------------
+    # Modes m and m + nf are the same flavour on x-neighbouring sites, and m and m + nf*Lx the same
+    # flavour on y-neighbouring sites, so these two diagonals are exactly the allowed hoppings —
+    # the flavour rule is built into the choice of offset. Only the boundary-crossing x bonds
+    # (every Lx-th) still have to be dropped, as in `build_general_H_BdG_2D_NN`.
+    μs = η[1:N]
+
+    hop_x = [ let i = parton_site(p, nf), f = parton_flavour(p, nf)
+                  i % Lx == 0 ? z : η[o_hx + (xbond(i) - 1) * nf + f]
+              end for p in 1:(N - nf) ]
+
+    hop_y = [ η[o_hy + p] for p in 1:(N - nf * Lx) ]
+
+    T = band(0, μs) +
+        band(nf, hop_x)      + band(-nf, conj.(hop_x)) +
+        band(nf * Lx, hop_y) + band(-(nf * Lx), conj.(hop_y))
+
+    # ---- D: Sz-neutral pairing (antisymmetric: D[m,m'] = -D[m',m]) ----------------------------
+    # Pairing (i,f1)-(j,f2) with f2 = nf + 1 - f1 sits on the diagonal at offset `bond_offset + Δf(f1)`,
+    # one diagonal per f1. Different f1 (and on-site vs bond) can share an offset, but never a row,
+    # because each contribution is masked to rows of its own flavour — so summing them is exact.
+    antidiag(o, v) = band(o, -v) + band(-o, v)
+
+    # on-site pairing (i,f1)-(i,f2), f1 < f2 only (the reverse is fixed by antisymmetry)
+    D_onsite = sum(
+        antidiag(Δf(f1),
+                 [ parton_flavour(p, nf) == f1 ?
+                       η[o_p0 + (parton_site(p, nf) - 1) * n_op + f1] : z
+                   for p in 1:(N - Δf(f1)) ])
+        for f1 in 1:n_op; init = zeros(Tη, N, N))
+
+    D_x = sum(
+        antidiag(nf + Δf(f1),
+                 [ let i = parton_site(p, nf)
+                       (parton_flavour(p, nf) == f1 && i % Lx != 0) ?
+                           η[o_px + (xbond(i) - 1) * nf + f1] : z
+                   end for p in 1:(N - nf - Δf(f1)) ])
+        for f1 in 1:nf; init = zeros(Tη, N, N))
+
+    D_y = sum(
+        antidiag(nf * Lx + Δf(f1),
+                 [ parton_flavour(p, nf) == f1 ?
+                       η[o_py + (parton_site(p, nf) - 1) * nf + f1] : z
+                   for p in 1:(N - nf * Lx - Δf(f1)) ])
+        for f1 in 1:nf; init = zeros(Tη, N, N))
+
+    D = D_onsite + D_x + D_y
+
+    H_BdG = Matrix{Tη}([T D; D' -transpose(T)])
+    return Hermitian(H_BdG)
+end
+
+parton_site(m::Int, n_flavours::Int) = (m - 1) ÷ n_flavours + 1 # original site index of a parton mode
+parton_flavour(m::Int, n_flavours::Int) = mod1(m, n_flavours)   # flavour index of a parton mode (1..n_flavours)
+
 # helper functions for maximal number of parameters for 2D NN Hamiltonian
 get_max_num_MF_params_NN(Lx::Int, Ly::Int) = 5 * Lx * Ly - 2 * (Lx + Ly)
 get_max_num_hopping_x_NN(Lx::Int, Ly::Int) = Ly * (Lx - 1)
 get_max_num_hopping_y_NN(Lx::Int, Ly::Int) = Lx * (Ly - 1)
+
+"""
+    get_max_num_MF_params_NN_parton(Lx, Ly, n_flavours)
+
+Number of free mean-field parameters of `build_general_H_BdG_2D_NN_fixed_parton_flavour`:
+
+- Per parton: `n_flavours` (one on-site potential). 
+- Per NN bond: `n_flavours` hoppings (one per flavour) and `n_flavours` flavour-neutral pairings. 
+- Per site: `n_flavours ÷ 2` on-site flavour-neutral pairings.
+    Example (spin-1/2 system):
+    `n_flavours = 2` -> on-site flavour-neutral pairings = Δ_{↑↓} = -Δ_{↓↑}, (n_flavours ÷ 2) = 1.
+
+    Example (spin-1 system):
+    `n_flavours = 3` -> on-site flavour-neutral pairings = Δ_{+1 -1} = -Δ_{-1 +1}, (n_flavours ÷ 2) = 1.
+
+At `n_flavours = 1` this reduces exactly to `get_max_num_MF_params_NN(Lx, Ly)`.
+"""
+function get_max_num_MF_params_NN_parton(Lx::Int, Ly::Int, n_flavours::Int)
+    N = Lx * Ly
+    n_bonds = get_max_num_hopping_x_NN(Lx, Ly) + get_max_num_hopping_y_NN(Lx, Ly)
+
+    return N * (n_flavours + (n_flavours ÷ 2)) + 2 * n_flavours * n_bonds
+end
 
 """
     build_H_BdG_derivatives(H_BdG_func::Function, η::AbstractVector{<:Number}, N::Int)
@@ -547,16 +681,18 @@ where `Fⱼ = Mⱼ - Γ⁻¹` and `Mⱼ` is the matrix for the occupation projec
 """
 function build_slater_loggradient_cache(
     H_BdG_func::Function, 
-    η::AbstractVector{<:Number}, 
+    η::AbstractVector{<:Number},
     N::Int;
     parity_sector::Int=0,
-    target_state::Int=0
+    target_state::Int=0,
+    target_Sz=nothing,
+    n_flavours::Int=1
 )
     H = Matrix(H_BdG_func(η, N))
     # as Γ is in the Majorana basis (qq), we need to transform H to the same basis
     H_maj = transform_H_to_majorana_qq(H)
     dim = size(H_maj, 1)
-    Γ, _ = get_Γ_from_H_BdG(Hermitian(H), parity_sector; target_state=target_state)
+    Γ, _ = get_Γ_from_H_BdG(Hermitian(H), parity_sector; target_state=target_state, target_Sz=target_Sz, n_flavours=n_flavours)
 
     dHs = build_H_BdG_derivatives(H_BdG_func, η, N)
     dΓs = Vector{Matrix{ComplexF64}}(undef, length(dHs))
@@ -602,7 +738,128 @@ function build_slater_loggradient_cache(
 end
 
 function build_slater_loggradient_cache(GS::GaussianState)
-    return build_slater_loggradient_cache(GS.H_BdG_func, GS.η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state)
+    return build_slater_loggradient_cache(GS.H_BdG_func, GS.η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state, target_Sz=GS.target_Sz, n_flavours=GS.n_flavours)
+end
+
+"""
+    select_occ_ref_by_Sz(M, E, parity_sector, parity_vac, target_Sz, n_flavours)
+
+Pick the quasiparticle occupation reference that puts the Bogoliubov state in the flavour sector
+`target_Sz`, at the lowest quasiparticle energy cost.
+
+A flavour-conserving mean field (`build_general_H_BdG_2D_NN_fixed_parton_flavour`) only makes Sz
+*sharp* — **which** sector you land in is decided here, and the default index-and-parity fill of
+`get_Γ_from_H_BdG` decides it by accident.
+
+# Sz is affine in the reference
+
+`get_Γ_from_H_BdG` builds `G_dirac = M * Diagonal([occ; 1 .- occ]) * M'`, whose diagonal is the parton
+occupation (`n_m = 1/2 - Γ[2m-1, 2m]` in the Majorana convention used here). With `M = [U conj(V); V conj(U)]`
+that reads
+
+    n_m(occ) = Σ_k [ occ[k]·|U[m,k]|² + (1 - occ[k])·|V[m,k]|² ]
+
+so with `s_m` the Sz of mode `m`'s flavour,
+
+    Sz(occ) = Sz_vac + Σ_k occ[k]·q[k],   Sz_vac = Σ_m s_m Σ_k |V[m,k]|²,
+                                          q[k]   = Σ_m s_m (|U[m,k]|² - |V[m,k]|²)
+
+Each quasiparticle therefore carries a definite charge `q[k]` (one of the flavour charges) — that `q[k]`
+comes out quantised is exactly the statement that the mean field conserves Sz, and is asserted below.
+`Sz_vac` is computed rather than assumed: its value depends on how the positive-energy eigenvectors
+distribute over the charge blocks, which is Hamiltonian dependent (a Zeeman term makes it uneven).
+
+# Choosing the reference
+
+Minimise `Σ occ[k]·E[k]` subject to `Σ occ[k]·q[k] = target_Sz - Sz_vac` and the parity constraint
+`sum(occ) ≡ parity_sector + parity_vac (mod 2)`. Charges are half-integers, so in units of `2·Sz` this
+is a small integer knapsack solved exactly by DP over (accumulated charge, parity) — `O(N² · S)` states,
+negligible next to the `eigen` that produced `M`.
+
+Occupying quasiparticles never changes their number's parity independently of Sz, so the Sz sector and
+`parity_sector` stay independent knobs.
+
+Ties are broken by ascending energy so the choice is deterministic across `write!` calls; a
+near-degeneracy at the fill boundary means the sector is being held across a level crossing, which
+makes the amplitudes jump — that is what the `deg_warn_tol` warning flags.
+"""
+function select_occ_ref_by_Sz(M::AbstractMatrix, E::AbstractVector, parity_sector::Int, parity_vac::Int,
+                              target_Sz::Real, n_flavours::Int; charge_tol=1e-6, deg_warn_tol=1e-8)
+    N = size(M, 1) ÷ 2
+    @assert N % n_flavours == 0 "N=$(N) parton modes is not a multiple of n_flavours=$(n_flavours)"
+
+    # Sz carried by each parton mode: S, S-1, …, -S for n_flavours = 2S+1
+    s = [(n_flavours + 1) / 2 - parton_flavour(m, n_flavours) for m in 1:N]
+
+    U, V = get_bogoliubov_blocks(M)
+    Ua, Va = abs2.(U), abs2.(V)
+
+    Sz_vac = sum(s .* vec(sum(Va, dims=2)))
+    q = vec(transpose(s) * (Ua .- Va))
+
+    # Quantised charges ⇔ [H_BdG, Ŝz] = 0. A violation here is a broken mean field, not a bad target.
+    Q = round.(Int, 2 .* q)
+    @assert maximum(abs, 2 .* q .- Q) < charge_tol "Quasiparticle charges are not quantised (max deviation $(maximum(abs, 2 .* q .- Q))); the mean field does not conserve Sz, so no Sz sector can be selected."
+
+    target = round(Int, 2 * (target_Sz - Sz_vac))
+    @assert abs(2 * (target_Sz - Sz_vac) - target) < charge_tol "target_Sz=$(target_Sz) is not reachable: Sz_vac=$(Sz_vac) leaves a non-half-integer excess."
+
+    par_target = (parity_sector + parity_vac) % 2
+    Es = @view E[1:N]
+
+    # --- min-cost DP over (accumulated 2·Sz, parity of the occupied count) --------------------
+    lo = sum(min.(Q, 0))
+    hi = sum(max.(Q, 0))
+    W = hi - lo + 1
+    idx_of(qs) = qs - lo + 1
+
+    cost = fill(Inf, W, 2)
+    cost[idx_of(0), 1] = 0.0
+    take = falses(N, W, 2)
+
+    for k in 1:N
+        prev = cost
+        cost = copy(prev)                    # branch that leaves mode k empty
+        for idx in 1:W, par in 1:2
+            isfinite(prev[idx, par]) || continue
+            idx2 = idx + Q[k]
+            (1 <= idx2 <= W) || continue
+            par2 = 3 - par                   # occupying one more quasiparticle flips the parity
+            c = prev[idx, par] + Es[k]
+            if c < cost[idx2, par2]
+                cost[idx2, par2] = c
+                take[k, idx2, par2] = true
+            end
+        end
+    end
+
+    @assert 1 <= idx_of(target) <= W && isfinite(cost[idx_of(target), par_target + 1]) "target_Sz=$(target_Sz) is out of reach in parity sector $(parity_sector): with Sz_vac=$(Sz_vac) the reachable Sz range is [$(Sz_vac + lo/2), $(Sz_vac + hi/2)]."
+
+    # --- reconstruct the reference -----------------------------------------------------------
+    occ_ref = zeros(Int, N)
+    idx, par = idx_of(target), par_target + 1
+    for k in N:-1:1
+        if take[k, idx, par]
+            occ_ref[k] = 1
+            idx -= Q[k]
+            par = 3 - par
+        end
+    end
+
+    # A quasiparticle at the fill boundary that is degenerate with an unoccupied one of the same
+    # charge makes the choice arbitrary, and the amplitudes discontinuous from one write! to the next.
+    filled = findall(==(1), occ_ref)
+    if !isempty(filled)
+        e_max = maximum(Es[k] for k in filled)
+        for k in 1:N
+            if occ_ref[k] == 0 && abs(Es[k] - e_max) < deg_warn_tol * max(1.0, maximum(abs, Es))
+                @warn "select_occ_ref_by_Sz: unoccupied mode $k is degenerate with the highest filled mode; the Sz=$(target_Sz) reference is not unique and may jump between optimization steps."
+                break
+            end
+        end
+    end
+
+    return occ_ref
 end
 
 """
@@ -613,24 +870,36 @@ Given a Bogoliubov-de Gennes Hamiltonian matrix `H_BdG` and an occupation string
 # Keyword Arguments
 - `H_BdG::Hermitian`: The Bogoliubov-de Gennes Hamiltonian matrix `H_BdG = [T D; D† -Tᵀ]` (qp-ordered) of size `2N x 2N`.
 - `occ_string::Vector{Int}`: A vector of occupation numbers (0 or 1) for each site, of length `N`.
+- `target_Sz`: If given, the quasiparticle reference is chosen by `select_occ_ref_by_Sz` so that the
+  state sits in that flavour (Sz) sector instead of being filled by mode index; `target_state` is then
+  ignored. Requires a flavour-conserving `H_BdG` and `n_flavours = 2S+1` parton species per site.
 
 """
-function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::Int=0)
+function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::Int=0, target_Sz=nothing, n_flavours::Int=1)
     N = size(H_BdG, 1) ÷ 2
-    @assert target_state >= 0 && target_state <= N "target_state must be between 0 (ground state) and N=$(N) (fully excited state)"
 
     # Diagonalize the BdG Hamiltonian with the Bogoliubov transformation M
-    _, M = bogoliubov(H_BdG)
+    E, M = bogoliubov(H_BdG)
 
     # Construct the Correlation matrix in the Dirac basis (diagonal, quasiparticles) (qp-ordered)
     parity_vac = getParity(get_Γ0_from_H_BdG(H_BdG))
-    nfill = ((parity_sector + parity_vac) % 2) + 2 * target_state # fill correct number of modes depending on the parity_sector and the parity of the ground state for the current M
-    @assert nfill <= N "The parity sector and target state are incompatible for the given system size N=$(N). Please choose a different target_state or parity_sector."
-    hole_occ = ones(Int, N)
-    if nfill > 0
-        @views hole_occ[(N - nfill + 1):N] .= 0
+
+    particle_occ = if isnothing(target_Sz)
+        @assert target_state >= 0 && target_state <= N "target_state must be between 0 (ground state) and N=$(N) (fully excited state)"
+        nfill = ((parity_sector + parity_vac) % 2) + 2 * target_state # fill correct number of modes depending on the parity_sector and the parity of the ground state for the current M
+        @assert nfill <= N "The parity sector and target state are incompatible for the given system size N=$(N). Please choose a different target_state or parity_sector."
+        hole_occ = ones(Int, N)
+        if nfill > 0
+            @views hole_occ[(N - nfill + 1):N] .= 0
+        end
+        1 .- hole_occ
+    else
+        # `target_state` is ignored here: the Sz constraint plus energy minimization already fixes
+        # which quasiparticles are occupied.
+        select_occ_ref_by_Sz(M, E, parity_sector, parity_vac, target_Sz, n_flavours)
     end
-    particle_occ = 1 .- hole_occ
+
+    hole_occ = 1 .- particle_occ
     G_diag_dirac = Diagonal(vcat(particle_occ, hole_occ))
 
     # Transform G to the original basis using the Bogoliubov transformation M (qp-ordered)
