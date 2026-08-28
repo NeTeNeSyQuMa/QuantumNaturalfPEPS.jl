@@ -65,22 +65,16 @@ using QuantumNaturalfPEPS
 end
 
 @testset "BdG matrix (NN) with fixed parton flavour" begin
-    Lx, Ly = 2, 2      # original (spin) lattice
-    L = Lx * Ly
+    function check_fixed_flavour_BdG(Lx,Ly, nflavours)
+        parton_site = QuantumNaturalfPEPS.parton_site
+        parton_flavour = QuantumNaturalfPEPS.parton_flavour
 
-    parton_site = QuantumNaturalfPEPS.parton_site
-    parton_flavour = QuantumNaturalfPEPS.parton_flavour
+        # sites of the original lattice that may be connected: equal, x-neighbours (same row) or y-neighbours
+        is_onsite_or_NN(i, j) = (i == j) ||
+            (abs(i - j) == 1 && div(i - 1, Lx) == div(j - 1, Lx)) ||
+            (abs(i - j) == Lx)
 
-    # sites of the original lattice that may be connected: equal, x-neighbours (same row) or y-neighbours
-    is_onsite_or_NN(i, j) = (i == j) ||
-        (abs(i - j) == 1 && div(i - 1, Lx) == div(j - 1, Lx)) ||
-        (abs(i - j) == Lx)
-
-    function check_fixed_flavour_BdG(nflavours)
-        # the flavours are interleaved along x, so only x is stretched by the flavour multiplicity
-        Nx = nflavours * Lx
-        Ny = Ly
-        N = Nx * Ny
+        N = nflavours * Lx * Ly
 
         η = ones(QuantumNaturalfPEPS.get_max_num_MF_params_NN_parton(Lx, Ly, nflavours))
         H_bdG = QuantumNaturalfPEPS.build_general_H_BdG_2D_NN_fixed_parton_flavour(η, Lx, Ly, nflavours)
@@ -121,11 +115,13 @@ end
     end
 
     @testset "S=1/2" begin
-        check_fixed_flavour_BdG(2)
+        check_fixed_flavour_BdG(2,2,2)
+        check_fixed_flavour_BdG(3,2,2)
     end
 
     @testset "S=1" begin
-        check_fixed_flavour_BdG(3)
+        check_fixed_flavour_BdG(3,3,3)
+        check_fixed_flavour_BdG(2,3,3)
     end
 end
 
