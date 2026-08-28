@@ -2,7 +2,25 @@ using Test
 using LinearAlgebra
 using QuantumNaturalfPEPS
 
-@testset "Fixed parton flavour sector" begin
+Lx, Ly = 3, 3
+L = Lx * Ly
+η = ones(QuantumNaturalfPEPS.get_max_num_MF_params_NN(Lx, Ly))
+H = QuantumNaturalfPEPS.build_general_H_BdG_2D_NN(η, Lx, Ly)
+
+T = H[1:L, 1:L]
+D = H[1:L, L+1:end]
+display(D)
+
+nflavours = 2
+N = nflavours * L
+η = ones(QuantumNaturalfPEPS.get_max_num_MF_params_NN_parton(Lx, Ly, nflavours))
+H = QuantumNaturalfPEPS.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nflavours)
+
+T = H[1:N, 1:N]
+D = H[1:N, N+1:end]
+display(D)
+
+@testset "Fixed Sz sector" begin
     @testset "Parton indexing" begin
         Lx, Ly = 2,2
         L = Lx * Ly
@@ -64,7 +82,7 @@ using QuantumNaturalfPEPS
     end
 end
 
-@testset "BdG matrix (NN) with fixed parton flavour" begin
+@testset "BdG matrix (NN) with fixed Sz sector" begin
     function check_fixed_flavour_BdG(Lx,Ly, nflavours)
         parton_site = QuantumNaturalfPEPS.parton_site
         parton_flavour = QuantumNaturalfPEPS.parton_flavour
@@ -77,7 +95,7 @@ end
         N = nflavours * Lx * Ly
 
         η = ones(QuantumNaturalfPEPS.get_max_num_MF_params_NN_parton(Lx, Ly, nflavours))
-        H_bdG = QuantumNaturalfPEPS.build_general_H_BdG_2D_NN_fixed_parton_flavour(η, Lx, Ly, nflavours)
+        H_bdG = QuantumNaturalfPEPS.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nflavours)
 
         @test size(H_bdG) == (2N, 2N)
 
@@ -143,7 +161,7 @@ end
 #             N = nf * L
 #             nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
 #             η = randn(nη)
-#             H = QNF.build_general_H_BdG_2D_NN_fixed_parton_flavour(η, Lx, Ly, nf)
+#             H = QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)
 
 #             T = H[1:N, 1:N]
 #             D = H[1:N, N+1:end]
@@ -175,7 +193,7 @@ end
 #             L = Lx * Ly
 #             N = nf * L
 #             nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
-#             H = QNF.build_general_H_BdG_2D_NN_fixed_parton_flavour(randn(nη), Lx, Ly, nf)
+#             H = QNF.build_general_H_BdG_2D_NN_fixed_Sz(randn(nη), Lx, Ly, nf)
 
 #             for parity in 0:1
 #                 reached = 0
@@ -205,7 +223,7 @@ end
 #         Lx, Ly, nf = 2, 2, 2
 #         N = nf * Lx * Ly
 #         nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
-#         H = QNF.build_general_H_BdG_2D_NN_fixed_parton_flavour(randn(nη), Lx, Ly, nf)
+#         H = QNF.build_general_H_BdG_2D_NN_fixed_Sz(randn(nη), Lx, Ly, nf)
 
 #         _, o1 = QNF.get_Γ_from_H_BdG(H, 0; target_Sz=0.0, n_flavours=nf)
 #         _, o2 = QNF.get_Γ_from_H_BdG(H, 0; target_Sz=0.0, n_flavours=nf)
@@ -238,7 +256,7 @@ end
 #         nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
 #         η = randn(nη)
 #         η[1:N] .= [QNF.parton_flavour(m, nf) == 1 ? -0.8 : 0.8 for m in 1:N]
-#         H = QNF.build_general_H_BdG_2D_NN_fixed_parton_flavour(η, Lx, Ly, nf)
+#         H = QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)
 
 #         for target in (-1.0, 0.0, 1.0)
 #             Γ, _ = QNF.get_Γ_from_H_BdG(H, 0; target_Sz=target, n_flavours=nf)
@@ -266,7 +284,7 @@ end
 #         Lx, Ly, nf = 2, 2, 2
 #         N = nf * Lx * Ly
 #         nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
-#         H_func = (η, n) -> QNF.build_general_H_BdG_2D_NN_fixed_parton_flavour(η, Lx, Ly, nf)
+#         H_func = (η, n) -> QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)
 
 #         GS = QNF.GaussianState(H_func, N; η=randn(nη), parity_sector=0, target_Sz=1.0, n_flavours=nf)
 #         @test isapprox(Sz_from_Γ(GS.Γ, nf), 1.0; atol=1e-9)

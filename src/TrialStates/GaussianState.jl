@@ -71,6 +71,9 @@ The struct also includes the variational parameters η used to construct H_BdG.
 - `η::AbstractVector{<:Number}`: The vector of variational parameters used to construct H_BdG, which can be optimized during the training process.
 - `N::Int`: The number of sites.
 - `parity_sector::Int`: The parity sector of the state, which can be either 0 (even) or 1 (odd).
+- `target_state::Int`: The target state index, which can be 0 for the ground state, 1 for the first excited state, and so on up to the Nth mode.
+- `target_Sz::Union{Nothing, Float64}`: The Sz sector (total magnetization `Σ_m s_m n_m`) to hold fixed. If `nothing`, the modes are filled by mode index instead, and `target_state` is used to select the correct Bogoliubov vacuum in the Bloch-Messiah decomposition.
+- `n_flavours::Int`: The number of parton species per lattice site (2S+1). The convention is that the species are enumerated from 1 to 2S+1.
 - `occ_ref::Vector{Int}`: The quasiparticle occupation reference, which is important for selecting the correct Bogoliubov vacuum in the Bloch-Messiah decomposition. 
                         It is constructed from the combination of the `parity_sector` and the `target_state`.
 - `slater_loggrad_cache::SlaterLogGradientCache`: A cache for efficient gradient calculations in Slater determinant states, which stores the A matrix and its derivatives with respect to the variational parameters.
@@ -83,8 +86,8 @@ mutable struct GaussianState <: AbstractTrialState
     N::Int # number of sites
     parity_sector::Int # parity sector of the state: either 0 (even) or 1 (odd)
     target_state::Int # ground state (0), first excited state (1) and so on up to the Nth mode
-    target_Sz::Union{Nothing, Float64} # flavour (Sz) sector to hold fixed; `nothing` fills by mode index instead
-    n_flavours::Int # parton species per lattice site (2S+1); only meaningful together with target_Sz
+    target_Sz::Union{Nothing, Float64} # Sz sector (total magnetization) to hold fixed. `nothing` fills by mode index instead and `target_state` is used.
+    n_flavours::Int # parton species per lattice site (2S+1). We use the convention that the species are enumerated from 1:2S+1
     occ_ref::Vector{Int} # quasiparticle occupation reference. Important for selecting the correct Bogoliubov vacuum in Bloch-Messiah decomposition.
     slater_loggrad_cache::SlaterLogGradientCache # Cache for efficient gradient calculations in Slater determinant states
     amplitude_cache::GaussianAmplitudeCache # Cache for efficient amplitude calculations
@@ -189,7 +192,7 @@ end
 build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, N::Int) = build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, Int(sqrt(N)), Int(sqrt(N)))
 
 """
-    build_general_H_BdG_2D_NN_fixed_parton_flavour(η, Lx, Ly, n_flavours)
+    build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, n_flavours)
 
 Function that builds a general mean-field Bogoliubov-de Gennes Hamiltonian matrix with nearest-neighbor (NN) hopping
 and pairing terms for a given parton flavour number by fixing the flavour sector.
@@ -212,11 +215,9 @@ Example (spin-1/2 system):
 - `H_BdG::Hermitian`: `[T D; D' -Tᵀ]`, with size `(2N, 2N)` and `N = n_flavours * Lx * Ly`.
 
 # Note
-This only makes the flavour sector *sharp*.
-On **which** sector you land in is set by the quasiparticle occupation reference (`occ_ref`/`target_state` in `get_Γ_from_H_BdG`).
-
+This only makes sure that the Sz sector is preserved, which sector you land in is decided in `get_Γ_from_H_BdG`.
 """
-function build_general_H_BdG_2D_NN_fixed_parton_flavour(η::AbstractVector{<:Number}, Lx::Int, Ly::Int, n_flavours::Int)
+function build_general_H_BdG_2D_NN_fixed_Sz(η::AbstractVector{<:Number}, Lx::Int, Ly::Int, n_flavours::Int)
     N = n_flavours * Lx * Ly
 
     @assert n_flavours >= 1 "n_flavours must be >= 1 (n_flavours = 2S+1)"
@@ -305,7 +306,7 @@ get_max_num_hopping_y_NN(Lx::Int, Ly::Int) = Lx * (Ly - 1)
 """
     get_max_num_MF_params_NN_parton(Lx, Ly, n_flavours)
 
-Number of free mean-field parameters of `build_general_H_BdG_2D_NN_fixed_parton_flavour`:
+Number of free mean-field parameters of `build_general_H_BdG_2D_NN_fixed_Sz`:
 
 - Per parton: `n_flavours` (one on-site potential).
 - Per NN bond: `n_flavours` hoppings (one per flavour) and `n_flavours` flavour-neutral pairings.
@@ -746,60 +747,61 @@ function build_slater_loggradient_cache(GS::GaussianState)
 end
 
 """
-    select_occ_ref_by_Sz(M, E, parity_sector, parity_vac, target_Sz, n_flavours)
+    select_occ_ref_by_target_Sz(M, E, parity_sector, parity_vac, target_Sz, n_flavours)
 
-Pick the quasiparticle occupation reference that puts the Bogoliubov state in the flavour sector
-`target_Sz`, at the lowest quasiparticle energy cost.
+Pick the quasiparticle occupation reference that puts the Bogoliubov state in the Sz sector `target_Sz`, at the lowest quasiparticle energy cost.
 
-A flavour-conserving mean field (`build_general_H_BdG_2D_NN_fixed_parton_flavour`) only makes Sz
-*sharp* — **which** sector you land in is decided here, and the default index-and-parity fill of
-`get_Γ_from_H_BdG` decides it by accident.
+Here `Sz = Σ_m s_m n_m` is the total magnetization, with `s_m ∈ {S, S-1, …, -S}` the Sz carried and `n_m` the occupation of parton mode `m`.
 
-# Sz is affine in the reference
+In `get_Γ_from_H_BdG` we build `G_dirac = M * Diagonal([occ; 1 .- occ]) * M'`, whose diagonal is the parton
+occupation. 
+With `M = [U conj(V); V conj(U)]` that reads:
 
-`get_Γ_from_H_BdG` builds `G_dirac = M * Diagonal([occ; 1 .- occ]) * M'`, whose diagonal is the parton
-occupation (`n_m = 1/2 - Γ[2m-1, 2m]` in the Majorana convention used here). With `M = [U conj(V); V conj(U)]`
-that reads
-
+```
     n_m(occ) = Σ_k [ occ[k]·|U[m,k]|² + (1 - occ[k])·|V[m,k]|² ]
-
-so with `s_m` the Sz of mode `m`'s flavour,
-
+```
+and
+```
     Sz(occ) = Sz_vac + Σ_k occ[k]·q[k],   Sz_vac = Σ_m s_m Σ_k |V[m,k]|²,
                                           q[k]   = Σ_m s_m (|U[m,k]|² - |V[m,k]|²)
+```
+for a quasiparticle occupation reference `occ`.
 
-Each quasiparticle therefore carries a definite charge `q[k]` (one of the flavour charges) — that `q[k]`
-comes out quantised is exactly the statement that the mean field conserves Sz, and is asserted below.
-`Sz_vac` is computed rather than assumed: its value depends on how the positive-energy eigenvectors
-distribute over the charge blocks, which is Hamiltonian dependent (a Zeeman term makes it uneven).
+Each quasiparticle carries a definite Sz charge `q[k]` (one of the `±s_m`).
 
 # Choosing the reference
 
 Minimise `Σ occ[k]·E[k]` subject to `Σ occ[k]·q[k] = target_Sz - Sz_vac` and the parity constraint
-`sum(occ) ≡ parity_sector + parity_vac (mod 2)`. Charges are half-integers, so in units of `2·Sz` this
-is a small integer knapsack solved exactly by DP over (accumulated charge, parity) — `O(N² · S)` states,
-negligible next to the `eigen` that produced `M`.
+`sum(occ) ≡ parity_sector + parity_vac (mod 2)`. 
 
-Occupying quasiparticles never changes their number's parity independently of Sz, so the Sz sector and
-`parity_sector` stay independent knobs.
+Occupying quasiparticles never changes their number's parity independently of Sz, so the Sz sector and `parity_sector` stay independent knobs.
 
-Ties are broken by ascending energy so the choice is deterministic across `write!` calls; a
-near-degeneracy at the fill boundary means the sector is being held across a level crossing, which
-makes the amplitudes jump — that is what the `deg_warn_tol` warning flags.
+# Keyword Arguments
+- `M::AbstractMatrix`: The Bogoliubov transformation matrix.
+- `E::AbstractVector`: The quasiparticle energies.
+- `parity_sector::Int`: The parity sector to select (0 or 1).
+- `parity_vac::Int`: The parity of the vacuum state (0 or 1).
+- `target_Sz::Real`: The target Sz sector (total magnetization) to select.
+- `n_flavours::Int`: The number of flavours (2S+1 for spin-S systems).
+
+# Optional Keyword Arguments
+- `charge_tol::Real`: Tolerance for checking quantisation of quasiparticle charges.
+- `deg_warn_tol::Real`: Tolerance for warning about near-degenerate quasiparticles at the fill boundary. 
+
 """
-function select_occ_ref_by_Sz(M::AbstractMatrix, E::AbstractVector, parity_sector::Int, parity_vac::Int,
+function select_occ_ref_by_target_Sz(M::AbstractMatrix, E::AbstractVector, parity_sector::Int, parity_vac::Int,
                               target_Sz::Real, n_flavours::Int; charge_tol=1e-6, deg_warn_tol=1e-8)
     N = size(M, 1) ÷ 2
     @assert N % n_flavours == 0 "N=$(N) parton modes is not a multiple of n_flavours=$(n_flavours)"
 
-    # Sz carried by each parton mode: S, S-1, …, -S for n_flavours = 2S+1
-    s = [(n_flavours + 1) / 2 - parton_flavour(m, n_flavours) for m in 1:N]
+    # Sz carried by each parton mode's flavour: S, S-1, …, -S for n_flavours = 2S+1
+    Sz_arr = [(n_flavours + 1) / 2 - parton_flavour(m, n_flavours) for m in 1:N]
 
     U, V = get_bogoliubov_blocks(M)
     Ua, Va = abs2.(U), abs2.(V)
 
-    Sz_vac = sum(s .* vec(sum(Va, dims=2)))
-    q = vec(transpose(s) * (Ua .- Va))
+    Sz_vac = sum(Sz_arr .* vec(sum(Va, dims=2))) # The vacuum Sz is the sum of the Sz of the occupied modes in the Bogoliubov vacuum (the negative-energy modes).
+    q = vec(transpose(Sz_arr) * (Ua .- Va)) # The Sz charge q of each quasiparticle: the Sz it adds (particle part U) minus the Sz it removes (hole part V).
 
     # Quantised charges ⇔ [H_BdG, Ŝz] = 0. A violation here is a broken mean field, not a bad target.
     Q = round.(Int, 2 .* q)
@@ -857,7 +859,7 @@ function select_occ_ref_by_Sz(M::AbstractMatrix, E::AbstractVector, parity_secto
         e_max = maximum(Es[k] for k in filled)
         for k in 1:N
             if occ_ref[k] == 0 && abs(Es[k] - e_max) < deg_warn_tol * max(1.0, maximum(abs, Es))
-                @warn "select_occ_ref_by_Sz: unoccupied mode $k is degenerate with the highest filled mode; the Sz=$(target_Sz) reference is not unique and may jump between optimization steps."
+                @warn "select_occ_ref_by_target_Sz: unoccupied mode $k is degenerate with the highest filled mode; the Sz=$(target_Sz) reference is not unique and may jump between optimization steps."
                 break
             end
         end
@@ -874,8 +876,8 @@ Given a Bogoliubov-de Gennes Hamiltonian matrix `H_BdG` and an occupation string
 # Keyword Arguments
 - `H_BdG::Hermitian`: The Bogoliubov-de Gennes Hamiltonian matrix `H_BdG = [T D; D† -Tᵀ]` (qp-ordered) of size `2N x 2N`.
 - `occ_string::Vector{Int}`: A vector of occupation numbers (0 or 1) for each site, of length `N`.
-- `target_Sz`: If given, the quasiparticle reference is chosen by `select_occ_ref_by_Sz` so that the
-  state sits in that flavour (Sz) sector instead of being filled by mode index; `target_state` is then
+- `target_Sz`: If given, the quasiparticle reference is chosen by `select_occ_ref_by_target_Sz` so that the
+  state sits in that Sz sector instead of being filled by mode index; `target_state` is then
   ignored. Requires a flavour-conserving `H_BdG` and `n_flavours = 2S+1` parton species per site.
 
 """
@@ -900,7 +902,7 @@ function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::I
     else
         # `target_state` is ignored here: the Sz constraint plus energy minimization already fixes
         # which quasiparticles are occupied.
-        select_occ_ref_by_Sz(M, E, parity_sector, parity_vac, target_Sz, n_flavours)
+        select_occ_ref_by_target_Sz(M, E, parity_sector, parity_vac, target_Sz, n_flavours)
     end
 
     hole_occ = 1 .- particle_occ
