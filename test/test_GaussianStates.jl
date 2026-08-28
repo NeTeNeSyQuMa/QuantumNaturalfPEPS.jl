@@ -462,5 +462,48 @@ using QuantumNaturalfPEPS
             η[hy_range] .= -t_mf
             @test check_bloch_messiah(QuantumNaturalfPEPS.build_general_H_BdG_2D_NN(η, Lx, Ly))
         end
+
+        @testset "truncation of null Vbar columns at the noise floor" begin
+            # Regression: for a Slater determinant (no pairing, e.g. a π-flux hopping state)
+            # half the columns of Vbar vanish and their numerical noise floor sits at ~1e-10 —
+            # exactly where an *absolute* 1e-10 cutoff stops recognising them as zero. A null
+            # column then survives, Q_mat comes out one dimension too large, and pfaffian()
+            # returns 0 for *every* configuration: logψ = -Inf everywhere, so the importance
+            # weights come out NaN and the optimisation dies with
+            # "ArgumentError: weights cannot contain Inf or NaN values".
+            # truncated_bloch_messiah only slices blocks, so synthetic input suffices here:
+            # n_pair paired modes (v_p ~ 0.5) followed by n_null columns of pure noise.
+            function synthetic_bloch_messiah(n_pair, n_null, noise)
+                n = n_pair + n_null
+                Vbar = zeros(ComplexF64, n, n)
+                for p in 1:2:n_pair
+                    v = 0.3 + 0.05p
+                    Vbar[p, p+1] = im * v
+                    Vbar[p+1, p] = -im * v
+                end
+                for c in n_pair+1:n, r in 1:n
+                    Vbar[r, c] = noise * (1 + 0.1r) # deterministic stand-in for eigensolver noise
+                end
+                Ubar = Matrix{ComplexF64}(I, n, n)
+                D = Matrix{ComplexF64}(I, n, n)
+                C = Matrix{ComplexF64}(I, n, n)
+                return ([D zeros(size(D)); zeros(size(D)) conj.(D)],
+                        [Ubar Vbar; Vbar Ubar],
+                        [C zeros(size(C)); zeros(size(C)) conj.(C)])
+            end
+
+            # The null columns must be truncated at every noise level, not just far below 1e-10.
+            for noise in (1e-16, 1e-13, 1e-11, 1e-10, 5e-10)
+                Dmat, UVmat, Cmat = synthetic_bloch_messiah(8, 8, noise)
+                _, UVmat_prime, _ = QuantumNaturalfPEPS.truncated_bloch_messiah(Dmat, UVmat, Cmat)
+                @test size(UVmat_prime, 1) ÷ 2 == 8
+            end
+
+            # A Vbar that is nothing but noise carries no paired modes at all and must still be
+            # truncated away completely (the absolute cutoff is kept as a floor for this).
+            Dmat, UVmat, Cmat = synthetic_bloch_messiah(0, 8, 1e-13)
+            _, UVmat_prime, _ = QuantumNaturalfPEPS.truncated_bloch_messiah(Dmat, UVmat, Cmat)
+            @test size(UVmat_prime, 1) ÷ 2 == 0
+        end
     end
 end;

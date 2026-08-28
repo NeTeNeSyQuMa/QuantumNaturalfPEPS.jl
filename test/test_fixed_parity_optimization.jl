@@ -70,7 +70,7 @@ end
     η_init = deepcopy(η0)
 
     # Generate Operators for QNG
-    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks_Slater(H_BdG, _build_H_BdG_mat, N; parity_sector=parity_sector, target_state=0)
+    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(H_BdG, _build_H_BdG_mat, N; parity_sector=parity_sector, target_state=0, threaded=true)
 
     # Setup the Integrator and Solver
     integrator = QuantumNaturalGradient.Euler(lr=0.09)
@@ -112,7 +112,7 @@ end
     η_init = deepcopy(η0)
 
     # Generate Operators for QNG
-    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks_Slater(H_BdG, _build_H_BdG_mat, N; parity_sector=parity_sector_1st_excited, target_state=0)
+    Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(H_BdG, _build_H_BdG_mat, N; parity_sector=parity_sector_1st_excited, target_state=0, threaded=true)
 
     # Setup the Integrator and Solver
     integrator = QuantumNaturalGradient.Euler(lr=0.05)
