@@ -994,7 +994,7 @@ Given a Bogoliubov-de Gennes Hamiltonian matrix `H_BdG` and an occupation string
 - `H_BdG::Hermitian`: The Bogoliubov-de Gennes Hamiltonian matrix `H_BdG = [T D; D† -Tᵀ]` (qp-ordered) of size `2N x 2N`.
 - `parity_sector::Int`: The parity sector (0 or 1) to select the state from.
 - `target_state::Int`: The target state index, which can be 0 for the ground state, 1 for the first excited state, and so on up to the Nth mode.
-- `target_Sz::Union{Int,Nothing}`: If given, the quasiparticle reference is chosen by `select_occ_ref_by_target_Sz` so that the tate sits in that Sz sector instead of being filled only specified by `target_state`. 
+- `target_Sz::Union{Nothing, Real}`: If given, the quasiparticle reference is chosen by `select_occ_ref_by_target_Sz` so that the state sits in that Sz sector instead of being filled only specified by `target_state`. 
     Requires a Sz-conserving `H_BdG`.
 - `n_flavours::Int`: The number of flavours (2S+1 for spin-S systems). If set to 1, the BdG Hamiltonian has no spin parent Hamiltonian ( For example if we look at the bare Hubbard Hamiltonian which is already fermionic ).
 
