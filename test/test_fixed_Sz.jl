@@ -296,3 +296,173 @@ end
 #         end
 #     end
 # end
+
+@testset "target_state ladder inside a fixed Sz sector" begin
+    using Random
+    QNF = QuantumNaturalfPEPS
+
+    # Brute-force reference: enumerate every occ ∈ {0,1}^N, keep the ones that land in the
+    # (target_Sz, parity) sector, sort by quasiparticle energy. The DP must reproduce that ordering.
+    function sector_states(M, E, parity_sector, parity_vac, target_Sz, nf)
+        N = size(M, 1) ÷ 2
+        U, V = QNF.get_bogoliubov_blocks(M)
+        s = [(nf + 1) / 2 - QNF.parton_flavour(m, nf) for m in 1:N]
+        q = vec(transpose(s) * (abs2.(U) .- abs2.(V)))
+        Sz_vac = sum(s .* vec(sum(abs2.(V), dims=2)))
+        par_t = (parity_sector + parity_vac) % 2
+        out = Float64[]
+        for idx in 0:(2^N - 1)
+            occ = digits(idx, base=2, pad=N)
+            sum(occ) % 2 == par_t || continue
+            isapprox(Sz_vac + sum(occ .* q), target_Sz; atol=1e-8) || continue
+            push!(out, sum(occ .* E[1:N]))
+        end
+        return sort!(out)
+    end
+
+    for (nf, Sz_targets) in ((2, (-1.0, -0.5, 0.0, 0.5, 1.0)), (3, (-1.0, 0.0, 1.0, 2.0)))
+        @testset "n_flavours = $nf" begin
+            Lx, Ly = 2, 2
+            N = nf * Lx * Ly
+            Random.seed!(2024 + nf)
+            for _ in 1:3
+                η = randn(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
+                H = Hermitian(Matrix(QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)))
+                E, M = QNF.bogoliubov(H)
+                parity_vac = QNF.getParity(QNF.get_Γ0_from_H_BdG(H))
+
+                for ps in (0, 1), tSz in Sz_targets
+                    ref = sector_states(M, E, ps, parity_vac, tSz, nf)
+                    isempty(ref) && continue
+
+                    for ts in 0:min(length(ref) - 1, 4)
+                        occ = QNF.select_occ_ref_by_target_Sz(M, E, ps, parity_vac, tSz, ts, nf)
+                        # ts-th lowest energy in the sector ...
+                        @test isapprox(sum(occ .* E[1:N]), ref[ts + 1]; atol=1e-9)
+                        # ... and the reference actually sits in the requested parity sector
+                        @test sum(occ) % 2 == (ps + parity_vac) % 2
+                    end
+
+                    # asking past the last state of the sector must fail loudly, not wrap around
+                    @test_throws AssertionError QNF.select_occ_ref_by_target_Sz(
+                        M, E, ps, parity_vac, tSz, length(ref), nf)
+                end
+            end
+        end
+    end
+
+    @testset "ladder through GaussianState" begin
+        nf, Lx, Ly = 2, 2, 2
+        N = nf * Lx * Ly
+        Random.seed!(3)
+        η = randn(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
+        H_func(θ, n) = QNF.build_general_H_BdG_2D_NN_fixed_Sz(θ, Lx, Ly, nf)
+        E, _ = QNF.bogoliubov(Hermitian(Matrix(H_func(η, N))))
+
+        occs = [QNF.GaussianState(H_func, N; η=η, parity_sector=0, target_state=ts,
+                                  target_Sz=0.0, n_flavours=nf).occ_ref for ts in 0:3]
+        energies = [sum(o .* E[1:N]) for o in occs]
+
+        @test issorted(energies)                       # walks *up* the ladder
+        @test length(unique(occs)) == length(occs)     # and never repeats a state
+        @test all(o -> sum(o) % 2 == 0, occs)          # parity_vac = 0 here, so parity_sector 0 ⇒ even
+    end
+end
+
+@testset "Sz alignment of degenerate Bogoliubov multiplets" begin
+    using Random
+    QNF = QuantumNaturalfPEPS
+
+    # Sz read straight off the covariance matrix: n_m = 1/2 - Γ[2m-1, 2m] in the Majorana (qq) convention.
+    function Sz_from_Γ(Γ, nf)
+        N = size(Γ, 1) ÷ 2
+        s = QNF.sz_per_mode(N, nf)
+        return sum(s[m] * (0.5 - real(Γ[2m-1, 2m])) for m in 1:N)
+    end
+
+    @testset "a spin-symmetric mean field needs the rotation" begin
+        # Regression: `eigen` returns an arbitrary basis inside a degenerate eigenspace, so for a
+        # uniform (fully spin-degenerate) mean field it hands back superpositions of the ±Sz partners.
+        # The quasiparticle charges then come out fractional even though ‖[H, Ŝz]‖ is exactly 0, and
+        # select_occ_ref_by_target_Sz used to reject the Hamiltonian as non-Sz-conserving.
+        for (nf, Lx, Ly) in ((2, 2, 2), (3, 2, 2), (2, 3, 2), (2, 3, 3))
+            N = nf * Lx * Ly
+            η = ones(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
+            H = Hermitian(Matrix(QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)))
+            Sz_op = QNF.sz_operator_BdG(N, nf)
+            s = QNF.sz_per_mode(N, nf)
+
+            @test norm(H * Sz_op - Sz_op * H, Inf) < 1e-12   # the mean field really does conserve Sz
+
+            E, M0 = QNF.bogoliubov(H)
+            charge_dev(Mx) = begin
+                U, V = QNF.get_bogoliubov_blocks(Mx)
+                q = vec(transpose(s) * (abs2.(U) .- abs2.(V)))
+                maximum(abs, 2 .* q .- round.(2 .* q))
+            end
+
+            @test charge_dev(M0) > 1e-3          # unrotated: fractional charges, the bug
+            M = QNF.align_bogoliubov_to_Sz(H, E, M0, nf)
+            @test charge_dev(M) < 1e-9           # rotated: quantised
+
+            # the rotation must leave M a valid Bogoliubov transformation ...
+            U, V = QNF.get_bogoliubov_blocks(M)
+            @test norm(M' * M - I, Inf) < 1e-10
+            @test norm(U'U + V'V - I, Inf) < 1e-10
+            @test norm(transpose(U) * V + transpose(V) * U, Inf) < 1e-10
+            # ... diagonalizing the same H with the same spectrum ...
+            @test norm(M' * H * M - Diagonal(E), Inf) < 1e-10
+            # ... and preserve the particle-hole structure M = [X C(X)]
+            @test M[:, N+1:2N] ≈ vcat(conj.(M[N+1:end, 1:N]), conj.(M[1:N, 1:N]))
+        end
+    end
+
+    @testset "no-op when nothing is degenerate" begin
+        nf, Lx, Ly = 2, 2, 2
+        Random.seed!(3)
+        η = randn(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
+        H = Hermitian(Matrix(QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)))
+        E, M0 = QNF.bogoliubov(H)
+        @test QNF.align_bogoliubov_to_Sz(H, E, M0, nf) == M0   # bit-identical, W = I
+    end
+
+    @testset "n_flavours = 1 is a no-op" begin
+        Lx, Ly = 2, 2
+        N = Lx * Ly
+        Random.seed!(5)
+        η = randn(QNF.get_max_num_MF_params_NN(Lx, Ly))
+        H = Hermitian(Matrix(QNF.build_general_H_BdG_2D_NN(η, Lx, Ly)))
+        E, M0 = QNF.bogoliubov(H)
+        @test QNF.align_bogoliubov_to_Sz(H, E, M0, 1) === M0
+    end
+
+    @testset "a genuinely Sz-breaking mean field is still rejected" begin
+        # The rotation makes a degenerate multiplet's charges quantised *by construction*, so the
+        # downstream charge check can no longer see a broken mean field — Sz conservation has to be
+        # asserted on H itself. c†_{1↑}c_{1↓} + h.c. changes Sz by 1.
+        nf, Lx, Ly = 2, 2, 2
+        N = nf * Lx * Ly
+        for breaker in (0.4, 1e-3)
+            Hm = Matrix(QNF.build_general_H_BdG_2D_NN_fixed_Sz(
+                ones(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)), Lx, Ly, nf))
+            Hm[1, 2] += breaker; Hm[2, 1] += breaker
+            Hm[N+1, N+2] -= breaker; Hm[N+2, N+1] -= breaker
+            @test_throws AssertionError QNF.get_Γ_from_H_BdG(Hermitian(Hm), 0; target_Sz=0.0, n_flavours=nf)
+        end
+    end
+
+    @testset "end to end at a uniform mean field" begin
+        nf, Lx, Ly = 2, 2, 2
+        N = nf * Lx * Ly
+        η = ones(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
+        H_func(θ, n) = QNF.build_general_H_BdG_2D_NN_fixed_Sz(θ, Lx, Ly, nf)
+
+        for tSz in (-2.0, -1.0, 0.0, 1.0, 2.0)
+            GS = QNF.GaussianState(H_func, N; η=η, parity_sector=0, target_Sz=tSz, n_flavours=nf)
+            @test isapprox(Sz_from_Γ(GS.Γ, nf), tSz; atol=1e-9)   # lands in the requested sector
+            @test QNF.getParity(GS.Γ) == 0
+            # the Gaussian distribution still normalizes, i.e. Γ is a sane covariance matrix
+            @test isapprox(sum(QNF.get_prob(GS, digits(i, base=2, pad=N)) for i in 0:(2^N - 1)), 1.0; atol=1e-8)
+        end
+    end
+end

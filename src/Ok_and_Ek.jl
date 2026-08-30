@@ -110,7 +110,7 @@ function Ok_and_Ek(GS::GaussianState, H_BdG_exact::Hermitian; timer=TimerOutput(
                    )
     
     S, logpc = @timeit timer "sampling" get_sample(GS; timer) # draw a sample
-    occ_string = collect(vec(S')) # julia vec(matrix) is column major, whereas we use row major in the sampling logic
+    occ_string = collect(vec(S))
 
     if amp_cache === nothing
         amp_cache = @timeit timer "amp_cache" build_amplitude_cache(GS)

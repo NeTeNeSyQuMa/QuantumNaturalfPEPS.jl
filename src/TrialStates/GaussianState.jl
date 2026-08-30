@@ -72,7 +72,9 @@ The struct also includes the variational parameters η used to construct H_BdG.
 - `N::Int`: The number of sites.
 - `parity_sector::Int`: The parity sector of the state, which can be either 0 (even) or 1 (odd).
 - `target_state::Int`: The target state index, which can be 0 for the ground state, 1 for the first excited state, and so on up to the Nth mode.
-- `target_Sz::Union{Nothing, Float64}`: The Sz sector (total magnetization `Σ_m s_m n_m`) to hold fixed. If `nothing`, the modes are filled by mode index instead, and `target_state` is used to select the correct Bogoliubov vacuum in the Bloch-Messiah decomposition.
+- `target_Sz::Union{Nothing, Float64}`: The Sz sector (total magnetization `Σ_m s_m n_m`) to hold fixed. 
+        `target_state` decides how the quasi-particle modes are filled in the given Sz sector. E.g. `target_state=0` picks the lowest energy state in the given Sz sector, `target_state=1` picks the second lowest energy state in the given Sz sector, and so on.
+        If `nothing`, the modes are filled specified by `target_state` only.
 - `n_flavours::Int`: The number of parton species per lattice site (2S+1). The convention is that the species are enumerated from 1 to 2S+1.
 - `occ_ref::Vector{Int}`: The quasiparticle occupation reference, which is important for selecting the correct Bogoliubov vacuum in the Bloch-Messiah decomposition. 
                         It is constructed from the combination of the `parity_sector` and the `target_state`.
@@ -97,7 +99,7 @@ mutable struct GaussianState <: AbstractTrialState
         @assert parity_sector == 0 || parity_sector == 1 "Parity must be either 0 (even) or 1 (odd)"
         Γ, occ_ref = get_Γ_from_H_BdG(H_BdG_func(η, N), parity_sector; target_state=target_state, target_Sz=target_Sz, n_flavours=n_flavours)
         slater_loggrad_cache = build_slater_loggradient_cache(H_BdG_func, η, N; parity_sector=parity_sector, target_state=target_state, target_Sz=target_Sz, n_flavours=n_flavours)
-        amplitude_cache = build_amplitude_cache(H_BdG_func(η, N), parity_sector, occ_ref)
+        amplitude_cache = build_amplitude_cache(H_BdG_func(η, N), parity_sector, occ_ref; n_flavours=n_flavours)
         new(Γ, H_BdG_func, η, N, parity_sector, target_state, target_Sz, n_flavours, occ_ref, slater_loggrad_cache, amplitude_cache)
     end
 end
@@ -119,7 +121,7 @@ function write!(GS::GaussianState, η::AbstractVector{<:Number})
     GS.η = η
     GS.Γ, GS.occ_ref = get_Γ_from_H_BdG(GS.H_BdG_func(η, GS.N), GS.parity_sector; target_state=GS.target_state, target_Sz=GS.target_Sz, n_flavours=GS.n_flavours)
     GS.slater_loggrad_cache = build_slater_loggradient_cache(GS.H_BdG_func, η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state, target_Sz=GS.target_Sz, n_flavours=GS.n_flavours)
-    GS.amplitude_cache = build_amplitude_cache(GS.H_BdG_func(η, GS.N), GS.parity_sector, GS.occ_ref)
+    GS.amplitude_cache = build_amplitude_cache(GS.H_BdG_func(η, GS.N), GS.parity_sector, GS.occ_ref; n_flavours=GS.n_flavours)
 end
 
 ###########################################################################################################
@@ -573,8 +575,11 @@ end
 Preconstructs the matrices and factors needed for efficient amplitude calculations in Gaussian states via `get_amplitude(cache::GaussianAmplitudeCache, occ_string::Vector{Int})`.
 
 """
-function build_amplitude_cache(H_BdG::Hermitian, parity::Int, occ_ref::Vector{Int})
-    _, M = bogoliubov(H_BdG)
+function build_amplitude_cache(H_BdG::Hermitian, parity::Int, occ_ref::Vector{Int}; n_flavours::Int=1)
+    E, M = bogoliubov(H_BdG)
+    # `occ_ref` was chosen in the Ŝz-aligned basis by `get_Γ_from_H_BdG`, so it has to be applied to
+    # the same one — otherwise Γ and the amplitudes describe different states.
+    M = align_bogoliubov_to_Sz(H_BdG, E, M, n_flavours)
 
     #  select the occupied modes from M based on the reference (Gaussian) state
     N = size(H_BdG, 1) ÷ 2
@@ -599,7 +604,7 @@ function build_amplitude_cache(H_BdG::Hermitian, parity::Int, occ_ref::Vector{In
 
     return GaussianAmplitudeCache(R_mat_full, Q_mat, parity, 1 / v_prod)
 end
-build_amplitude_cache(GS::GaussianState) = build_amplitude_cache(GS.H_BdG_func(GS.η, GS.N), GS.parity_sector, GS.occ_ref)
+build_amplitude_cache(GS::GaussianState) = build_amplitude_cache(GS.H_BdG_func(GS.η, GS.N), GS.parity_sector, GS.occ_ref; n_flavours=GS.n_flavours)
 
 """
     get_Slater_Ek_terms(H_BdG::Hermitian)
@@ -725,9 +730,101 @@ function build_slater_loggradient_cache(GS::GaussianState)
 end
 
 """
-    select_occ_ref_by_target_Sz(M, E, parity_sector, parity_vac, target_Sz, n_flavours)
+    sz_per_mode(N, n_flavours)
 
-Pick the quasiparticle occupation reference that puts the Bogoliubov state in the Sz sector `target_Sz`, at the lowest quasiparticle energy cost.
+The Sz carried by each of the `N` parton modes: `[S, S-1, …, -S]` for `n_flavours = 2S+1`, repeated
+over the lattice sites in the interleaved mode ordering.
+
+Returns a vector of length `N` with the Sz values for each mode.
+E.g. for spin-1/2 (n_flavours=2) on a 2x2 lattice (N=8), the modes are ordered as:
+```
+1↑, 1↓, 2↑, 2↓, 3↑, 3↓, 4↑, 4↓
+```
+and the Sz values are:
+```
+[ 1/2, -1/2, 1/2, -1/2, 1/2, -1/2, 1/2, -1/2 ]
+```
+"""
+sz_per_mode(N::Int, n_flavours::Int) = [(n_flavours + 1) / 2 - parton_flavour(m, n_flavours) for m in 1:N]
+
+"""
+    sz_operator_BdG(N, n_flavours)
+
+The Sz operator in the BdG basis is diagonal with the Sz values for each mode in the upper block and their negatives in the lower block.
+
+"""
+function sz_operator_BdG(N::Int, n_flavours::Int)
+    s = sz_per_mode(N, n_flavours)
+    return Diagonal(vcat(s, -s))
+end
+
+"""
+    align_bogoliubov_to_Sz(H_BdG, E, M, n_flavours; deg_tol=1e-8, comm_tol=1e-8)
+
+Rotate `M` inside each degenerate quasiparticle multiplet so that its columns are Ŝz eigenvectors, and
+return the rotated `M`. A no-op for `n_flavours == 1`, where Ŝz ≡ 0.
+
+`[H_BdG, Ŝz] = 0` guarantees that a *simultaneous* eigenbasis of the two exists — it does not guarantee
+that `eigen` hands you one. Inside a degenerate eigenspace the eigensolver is free to return any basis,
+and it generally returns superpositions of the ±Sz partners. A spin-symmetric mean field has a fully
+degenerate quasiparticle spectrum, so this is the normal case rather than an edge case: without this
+rotation the charges `q` in `select_occ_ref_by_target_Sz` come out fractional (e.g. `2q = ±0.40` for a
+uniform spin-1/2 mean field whose `‖[H, Ŝz]‖` is exactly 0) and the quantisation assert there fires,
+blaming the Hamiltonian for what is really a basis choice.
+
+Only degenerate multiplets are touched, so the spectrum is untouched and `M` stays a valid Bogoliubov
+transformation. Columns `1:N` are rotated by a unitary `W` that is block diagonal over the multiplets
+and columns `N+1:2N` by `conj(W)` — exactly what the particle-hole structure `M = [X  C(X)]` requires,
+since `C(X·W) = C(X)·conj(W)`.
+
+# Keyword Arguments
+- `deg_tol`: Relative tolerance (to the spectral scale) for treating neighbouring levels as degenerate.
+
+"""
+function align_bogoliubov_to_Sz(H_BdG::Hermitian, E::AbstractVector, M::AbstractMatrix, n_flavours::Int;
+                                deg_tol=1e-8, comm_tol=1e-8)
+    N = size(M, 1) ÷ 2
+    n_flavours == 1 && return M   # Ŝz ≡ 0, every basis is an Ŝz eigenbasis
+
+    Sz_op = sz_operator_BdG(N, n_flavours)
+    scale = max(maximum(abs, @view E[1:N]), one(real(eltype(E))))
+    comm = H_BdG * Sz_op - Sz_op * H_BdG # commutator [H, Ŝz]
+
+    #=
+        Sz conservation has to be checked here, on H itself, and not downstream on the quasiparticle
+        charges: after the rotation below, the charges of a degenerate multiplet are eigenvalues of the
+        *projected* Ŝz and so come out quantised by construction — a mean field with ‖[H, Ŝz]‖ = 0.8
+        was seen to yield charges of exactly ±1. The commutator is both the real precondition and the
+        cheaper test (Sz_op is diagonal, so this is O(N²) against the O(N³) diagonalization).
+    =#
+    @assert norm(comm, Inf) <= comm_tol * scale "The mean BdG Hamiltonian does not conserve Sz (‖[H, Ŝz]‖ = $(norm(comm, Inf))), so no Sz sector can be selected."
+
+    W = Matrix{eltype(M)}(I, N, N)
+
+    # we walk through the sorted quasiparticle energies and rotate each degenerate multiplet into an Ŝz eigenbasis
+    k = 1
+    while k <= N
+        j = k
+        while j < N && abs(E[j+1] - E[k]) <= deg_tol * scale # skip over degenerate multiplet
+            j += 1
+        end
+        if j > k # degenerate multiplet found, rotate it into an Ŝz eigenbasis
+            Mc = @view M[:, k:j] # the degenerate multiplet of quasiparticle modes
+            W[k:j, k:j] = eigen(Hermitian(Mc' * Sz_op * Mc)).vectors
+        end
+        k = j + 1
+    end
+
+    M_aligned = similar(M)
+    M_aligned[:, 1:N] = @view(M[:, 1:N]) * W
+    M_aligned[:, N+1:2N] = @view(M[:, N+1:2N]) * conj(W)
+    return M_aligned
+end
+
+"""
+    select_occ_ref_by_target_Sz(M, E, parity_sector, parity_vac, target_Sz, target_state, n_flavours)
+
+Pick the quasiparticle occupation reference that puts the Bogoliubov state in the Sz sector `target_Sz`, at the `target_state`-th lowest quasiparticle energy cost.
 
 Here `Sz = Σ_m s_m n_m` is the total magnetization, with `s_m ∈ {S, S-1, …, -S}` the Sz carried and `n_m` the occupation of parton mode `m`.
 
@@ -750,9 +847,14 @@ Each quasiparticle carries a definite Sz charge `q[k]` (one of the `±s_m`).
 # Choosing the reference
 
 Minimise `Σ occ[k]·E[k]` subject to `Σ occ[k]·q[k] = target_Sz - Sz_vac` and the parity constraint
-`sum(occ) ≡ parity_sector + parity_vac (mod 2)`. 
+`sum(occ) ≡ parity_sector + parity_vac (mod 2)`.
 
 Occupying quasiparticles never changes their number's parity independently of Sz, so the Sz sector and `parity_sector` stay independent knobs.
+
+`target_state` walks up the energy ladder *inside* that sector: `0` is the cheapest admissible `occ`,
+`1` the next cheapest, and so on. Each `occ` is a distinct quasiparticle configuration, so the ranking
+is over the many-body states of the sector, not over single modes — unlike the `target_Sz === nothing`
+path in `get_Γ_from_H_BdG`, which just fills `2·target_state` extra modes by index.
 
 # Keyword Arguments
 - `M::AbstractMatrix`: The Bogoliubov transformation matrix.
@@ -760,87 +862,124 @@ Occupying quasiparticles never changes their number's parity independently of Sz
 - `parity_sector::Int`: The parity sector to select (0 or 1).
 - `parity_vac::Int`: The parity of the vacuum state (0 or 1).
 - `target_Sz::Real`: The target Sz sector (total magnetization) to select.
+- `target_state::Int`: Which state of the sector to take: 0 = lowest energy, 1 = first excited, …
 - `n_flavours::Int`: The number of flavours (2S+1 for spin-S systems).
 
 # Optional Keyword Arguments
 - `charge_tol::Real`: Tolerance for checking quantisation of quasiparticle charges.
-- `deg_warn_tol::Real`: Tolerance for warning about near-degenerate quasiparticles at the fill boundary. 
+- `deg_warn_tol::Real`: Tolerance for warning that the selected state is degenerate with the next one up.
 
 """
 function select_occ_ref_by_target_Sz(M::AbstractMatrix, E::AbstractVector, parity_sector::Int, parity_vac::Int,
-                              target_Sz::Real, n_flavours::Int; charge_tol=1e-6, deg_warn_tol=1e-8)
+                              target_Sz::Real, target_state::Int, n_flavours::Int; charge_tol=1e-8, deg_warn_tol=1e-8)
+    @assert target_state >= 0 "target_state must be >= 0 (0 = lowest state in the Sz sector)"
     N = size(M, 1) ÷ 2
     @assert N % n_flavours == 0 "N=$(N) parton modes is not a multiple of n_flavours=$(n_flavours)"
 
-    # Sz carried by each parton mode's flavour: S, S-1, …, -S for n_flavours = 2S+1
-    Sz_arr = [(n_flavours + 1) / 2 - parton_flavour(m, n_flavours) for m in 1:N]
+    Sz_arr = sz_per_mode(N, n_flavours) # [S, S-1, …, -S] for n_flavours = 2S+1
 
     U, V = get_bogoliubov_blocks(M)
     Ua, Va = abs2.(U), abs2.(V)
 
     Sz_vac = sum(Sz_arr .* vec(sum(Va, dims=2))) # The vacuum Sz is the sum of the Sz of the occupied modes in the Bogoliubov vacuum (the negative-energy modes).
-    q = vec(transpose(Sz_arr) * (Ua .- Va)) # The Sz charge q of each quasiparticle: the Sz it adds (particle part U) minus the Sz it removes (hole part V).
+    q = vec(transpose(Sz_arr) * (Ua .- Va)) # The Sz charge q of each quasiparticle = the Sz it adds (particle part U) minus the Sz it removes (hole part V).
 
-    # Quantised charges ⇔ [H_BdG, Ŝz] = 0. A violation here is a broken mean field, not a bad target.
+    #=
+        The Sz charges are quantised in half-integer units, so 2q is an integer. This is a
+        post-condition on the *basis*, not a test of the Hamiltonian: Sz conservation is asserted on
+        H itself in `align_bogoliubov_to_Sz`, which must have run on M before it gets here — without
+        that rotation a perfectly Sz-conserving mean field still lands fractional charges here, and
+        with it a broken one can still land quantised ones. What this catches is an unrotated M
+        reaching us (a caller that skipped the alignment) or a multiplet the degeneracy tolerance
+        failed to group.
+    =#
     Q = round.(Int, 2 .* q)
-    @assert maximum(abs, 2 .* q .- Q) < charge_tol "Quasiparticle charges are not quantised (max deviation $(maximum(abs, 2 .* q .- Q))); the mean field does not conserve Sz, so no Sz sector can be selected."
+    @assert maximum(abs, 2 .* q .- Q) < charge_tol "Quasiparticle charges are not quantised (max deviation $(maximum(abs, 2 .* q .- Q))): M is not in an Ŝz eigenbasis. Was `align_bogoliubov_to_Sz` applied, and did it resolve every degenerate multiplet?"
 
-    target = round(Int, 2 * (target_Sz - Sz_vac))
+    target = round(Int, 2 * (target_Sz - Sz_vac)) # The target Sz sector in half-integer units, relative to the vacuum Sz. The factor of 2 is because the quasiparticle charges are quantised in half-integer units.
     @assert abs(2 * (target_Sz - Sz_vac) - target) < charge_tol "target_Sz=$(target_Sz) is not reachable: Sz_vac=$(Sz_vac) leaves a non-half-integer excess."
 
-    par_target = (parity_sector + parity_vac) % 2
-    Es = @view E[1:N]
+    parity_target = (parity_sector + parity_vac) % 2
+    Es = @view E[1:N] # The quasiparticle energies of the first N modes (the positive-energy modes)
 
-    # --- min-cost DP over (accumulated 2·Sz, parity of the occupied count) --------------------
-    lo = sum(min.(Q, 0))
-    hi = sum(max.(Q, 0))
-    W = hi - lo + 1
-    idx_of(qs) = qs - lo + 1
+    # --- k-best min-cost DP (Dynamic programming) over (accumulated 2·Sz, parity of the occupied count) -------------
+    lo = sum(min.(Q, 0))        # The lowest possible 2·Sz that can be reached by occupying quasiparticles (the sum of the negative charges)
+    hi = sum(max.(Q, 0))        # The highest possible 2·Sz that can be reached by occupying quasiparticles (the sum of the positive charges)
+    W = hi - lo + 1             # The width of the DP table in the Sz dimension, which is the range of possible 2·Sz values that can be reached by occupying quasiparticles. 
+    idx_of(qs) = qs - lo + 1    # The index in the DP table corresponding to a given 2·Sz value `qs`. The DP table is indexed from 1 to W, so we shift the range [lo, hi] to [1, W].
 
-    cost = fill(Inf, W, 2)
-    cost[idx_of(0), 1] = 0.0
-    take = falses(N, W, 2)
+    #=
+        cost[idx, parity, r] = the r-th cheapest energy, ascending in r, over the configurations of the
+        modes processed so far that reach charge `idx` with occupied-count parity `parity`. 
+        r=1 is the cheapest, r=2 is the second cheapest, etc.
 
-    for k in 1:N
+        One rank more than requested is carried (R = target_state + 2). The extra slot is never
+        selected, it only lets us see whether the selected state is degenerate with the next one up —
+        the case in which the reference is not unique and can jump between optimization steps.
+    =#
+    K = target_state + 1            # The rank of the target state in the Sz sector, 1-based.
+    R = K + 1                       # Next rank after the target state, used to check for degeneracy.
+    cost = fill(Inf, W, 2, R)       # The DP table of costs, initialized to Inf. For each Sz sector index (1 to W), we store the parity (0 or 1) and the R cheapest energies.
+    cost[idx_of(0), 1, 1] = 0.0     # The cost of reaching Sz=0 with even parity and rank 1 is 0, because the empty configuration has zero energy and zero Sz. This is the base case of the DP.
+    took = falses(N, W, 2, R)       # stores whether the k-th mode was occupied (true) or not (false) for the r-th cheapest configuration reaching (idx, parity). This is used to reconstruct the occupation reference later.
+    p_rank = zeros(Int, N, W, 2, R) # stores the rank of the predecessor configuration that led to the r-th cheapest configuration reaching (idx, parity). This is used to reconstruct the occupation reference later.
+
+    for k in 1:N # loop over the quasiparticle modes, adding one mode at a time to the DP table
         prev = cost
-        cost = copy(prev)                    # branch that leaves mode k empty
-        for idx in 1:W, par in 1:2
-            isfinite(prev[idx, par]) || continue
-            idx2 = idx + Q[k]
-            (1 <= idx2 <= W) || continue
-            par2 = 3 - par                   # occupying one more quasiparticle flips the parity
-            c = prev[idx, par] + Es[k]
-            if c < cost[idx2, par2]
-                cost[idx2, par2] = c
-                take[k, idx2, par2] = true
+        cost = fill(Inf, W, 2, R) # reset the cost table for the next mode
+        for idx in 1:W, parity in 1:2
+            #=
+                The configurations reaching (idx, parity) occur in 2 scenarios: 
+                
+                1. those that leave mode k empty (already ranked at (idx, parity) in `prev`)  
+                2. those that occupy it (ranked at the predecessor state, plus Es[k]). 
+                
+                Both lists are sorted, so merging their heads R times yields the R best of the union.
+            =#
+            idx0, par0 = idx - Q[k], 3 - parity  # predecessor: occupying one more quasiparticle flips the parity (1 based so 3 - parity gives correctly 1 (even) or 2 (odd))
+            is_allowed = 1 <= idx0 <= W          # the predecessor has a valid DP index, so we can take it
+            i = j = 1                            # merge heads into the skip list / the allowed list
+            for r in 1:R
+                a = prev[idx, parity, i] # the i-th cheapest configuration that leaves mode k empty
+                b = (is_allowed && j <= R) ? prev[idx0, par0, j] + Es[k] : Inf # the j-th cheapest configuration that occupies mode k, if allowed
+                (isfinite(a) || isfinite(b)) || break   # both lists exhausted
+                # take the cheaper of the two, and save which one we took
+                if a <= b 
+                    cost[idx, parity, r] = a
+                    p_rank[k, idx, parity, r] = i
+                    i += 1
+                else
+                    cost[idx, parity, r] = b
+                    took[k, idx, parity, r] = true
+                    p_rank[k, idx, parity, r] = j
+                    j += 1
+                end
             end
         end
     end
 
-    @assert 1 <= idx_of(target) <= W && isfinite(cost[idx_of(target), par_target + 1]) "target_Sz=$(target_Sz) is out of reach in parity sector $(parity_sector): with Sz_vac=$(Sz_vac) the reachable Sz range is [$(Sz_vac + lo/2), $(Sz_vac + hi/2)]."
+    @assert 1 <= idx_of(target) <= W && isfinite(cost[idx_of(target), parity_target + 1, 1]) "target_Sz=$(target_Sz) is out of reach in parity sector $(parity_sector): with Sz_vac=$(Sz_vac) the reachable Sz range is [$(Sz_vac + lo/2), $(Sz_vac + hi/2)]."
+    @assert isfinite(cost[idx_of(target), parity_target + 1, K]) "target_state=$(target_state) does not exist in the Sz=$(target_Sz) sector at parity $(parity_sector): it holds only $(count(isfinite, @view cost[idx_of(target), parity_target + 1, :])) states (counted up to $(R))."
 
     # --- reconstruct the reference -----------------------------------------------------------
     occ_ref = zeros(Int, N)
-    idx, par = idx_of(target), par_target + 1
+    idx, parity, r = idx_of(target), parity_target + 1, K
     for k in N:-1:1
-        if take[k, idx, par]
-            occ_ref[k] = 1
-            idx -= Q[k]
-            par = 3 - par
+        t = took[k, idx, parity, r]
+        r = p_rank[k, idx, parity, r]   # descend to the predecessor's rank before moving the state
+        if t
+            occ_ref[k] = 1 # occupy mode k
+            idx -= Q[k] # move to the predecessor's Sz index
+            parity = 3 - parity # flip parity when a mode is occupied
         end
     end
 
-    # A quasiparticle at the fill boundary that is degenerate with an unoccupied one of the same
-    # charge makes the choice arbitrary, and the amplitudes discontinuous from one write! to the next.
-    filled = findall(==(1), occ_ref)
-    if !isempty(filled)
-        e_max = maximum(Es[k] for k in filled)
-        for k in 1:N
-            if occ_ref[k] == 0 && abs(Es[k] - e_max) < deg_warn_tol * max(1.0, maximum(abs, Es))
-                @warn "select_occ_ref_by_target_Sz: unoccupied mode $k is degenerate with the highest filled mode; the Sz=$(target_Sz) reference is not unique and may jump between optimization steps."
-                break
-            end
-        end
+    # A selected state that is degenerate with the next one up makes the choice arbitrary, and the
+    # amplitudes discontinuous from one write! to the next.
+    e_sel = cost[idx_of(target), parity_target + 1, K]
+    e_next = cost[idx_of(target), parity_target + 1, R]
+    if isfinite(e_next) && abs(e_next - e_sel) < deg_warn_tol * max(1.0, maximum(abs, Es))
+        @warn "select_occ_ref_by_target_Sz: the Sz=$(target_Sz), target_state=$(target_state) reference is degenerate with the next state of the sector. It is not unique and may jump between optimization steps."
     end
 
     return occ_ref
@@ -853,19 +992,26 @@ Given a Bogoliubov-de Gennes Hamiltonian matrix `H_BdG` and an occupation string
 
 # Keyword Arguments
 - `H_BdG::Hermitian`: The Bogoliubov-de Gennes Hamiltonian matrix `H_BdG = [T D; D† -Tᵀ]` (qp-ordered) of size `2N x 2N`.
-- `occ_string::Vector{Int}`: A vector of occupation numbers (0 or 1) for each site, of length `N`.
-- `target_Sz`: If given, the quasiparticle reference is chosen by `select_occ_ref_by_target_Sz` so that the
-  state sits in that Sz sector instead of being filled by mode index; `target_state` is then
-  ignored. Requires a flavour-conserving `H_BdG` and `n_flavours = 2S+1` parton species per site.
+- `parity_sector::Int`: The parity sector (0 or 1) to select the state from.
+- `target_state::Int`: The target state index, which can be 0 for the ground state, 1 for the first excited state, and so on up to the Nth mode.
+- `target_Sz::Union{Int,Nothing}`: If given, the quasiparticle reference is chosen by `select_occ_ref_by_target_Sz` so that the tate sits in that Sz sector instead of being filled only specified by `target_state`. 
+    Requires a Sz-conserving `H_BdG`.
+- `n_flavours::Int`: The number of flavours (2S+1 for spin-S systems). If set to 1, the BdG Hamiltonian has no spin parent Hamiltonian ( For example if we look at the bare Hubbard Hamiltonian which is already fermionic ).
 
 """
-function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::Int=0, target_Sz=nothing, n_flavours::Int=1)
+function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::Int=0, target_Sz::Union{Int,Nothing}=nothing, n_flavours::Int=1)
     N = size(H_BdG, 1) ÷ 2
 
     # Diagonalize the BdG Hamiltonian with the Bogoliubov transformation M
     E, M = bogoliubov(H_BdG)
+    # With flavours present the degenerate multiplets must be rotated into an Ŝz eigenbasis before any
+    # occupation reference is read off them: `occ_ref` names individual columns of M, so it is only
+    # meaningful together with the basis it was chosen in. `build_amplitude_cache` applies the same
+    # rotation under the same condition, so both stay on the same M.
+    M = align_bogoliubov_to_Sz(H_BdG, E, M, n_flavours)
 
     # Construct the Correlation matrix in the Dirac basis (diagonal, quasiparticles) (qp-ordered)
+    # (the vacuum Γ is invariant under that rotation, so parity_vac needs no alignment)
     parity_vac = getParity(get_Γ0_from_H_BdG(H_BdG))
 
     particle_occ = if isnothing(target_Sz)
@@ -878,9 +1024,8 @@ function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::I
         end
         1 .- hole_occ
     else
-        # `target_state` is ignored here: the Sz constraint plus energy minimization already fixes
-        # which quasiparticles are occupied.
-        select_occ_ref_by_target_Sz(M, E, parity_sector, parity_vac, target_Sz, n_flavours)
+        # `target_state` here indexes the energy ladder *within* the Sz sector: 0 is the cheapest occupation, 1 the next cheapest, and so on.
+        select_occ_ref_by_target_Sz(M, E, parity_sector, parity_vac, target_Sz, target_state, n_flavours)
     end
 
     hole_occ = 1 .- particle_occ
