@@ -506,4 +506,44 @@ using QuantumNaturalfPEPS
             @test size(UVmat_prime, 1) ÷ 2 == 0
         end
     end
+
+    @testset "H_BdG derivatives" begin
+        # NN hopping chain with one parameter per bond: H = [T 0; 0 -Tᵀ] with
+        # T[i, i+1] = -η[i], T[i+1, i] = -conj(η[i]). Each Jacobian column is then
+        # known exactly — a handful of ±1 entries on bond `a` and zeros everywhere else.
+        N = 4
+        function hopping_H_BdG(η, N)
+            Z = zeros(eltype(η), N, N)
+            T = diagm(1 => -collect(η), -1 => -conj.(collect(η)))
+            return Hermitian([T Z; Z -transpose(T)])
+        end
+
+        @testset "real MF parameters" begin
+            η = [0.7, -1.3, 0.2]
+            dHs = QuantumNaturalfPEPS.build_H_BdG_derivatives(hopping_H_BdG, η, N)
+
+            @test length(dHs) == length(η)
+            for a in eachindex(η)
+                expected = zeros(Float64, 2N, 2N)
+                expected[a, a+1] = expected[a+1, a] = -1.0
+                expected[N+a, N+a+1] = expected[N+a+1, N+a] = 1.0
+                @test dHs[a] ≈ expected
+            end
+        end
+
+        @testset "complex MF parameters" begin
+            # Wirtinger ∂/∂ηₐ: the conjugated entries are antiholomorphic (f(z) = i+iv -> conj(f) = i-iv) and vanish.
+            # so only T[a, a+1] and (-Tᵀ)[N+a+1, N+a] survive.
+            η = ComplexF64[0.7 + 0.4im, -1.3 - 0.9im, 0.2im]
+            dHs = QuantumNaturalfPEPS.build_H_BdG_derivatives(hopping_H_BdG, η, N)
+
+            @test length(dHs) == length(η)
+            for a in eachindex(η)
+                expected = zeros(ComplexF64, 2N, 2N)
+                expected[a, a+1] = -1.0
+                expected[N+a+1, N+a] = 1.0
+                @test dHs[a] ≈ expected
+            end
+        end
+    end
 end;

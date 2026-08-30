@@ -332,60 +332,38 @@ end
 """
     build_H_BdG_derivatives(H_BdG_func::Function, η::AbstractVector{<:Number}, N::Int)
 
-Builds the derivative matrices dH/dη for the BdG Hamiltonian using automatic differentiation. 
+Builds the derivative matrices dH/dη for the BdG Hamiltonian.
 Returns a vector of matrices corresponding to the derivatives with respect to each variational parameter in `η`
+
+`H_BdG_func` is assumed to be **affine** in `η`, i.e. `H(η) = A(η) + B(η̄) + H(0)` with `A`, `B` linear —
+which every mean-field parametrization here is: each parameter enters a fixed set of matrix entries
+linearly (possibly conjugated on the transposed entry). The Jacobian columns are therefore exact finite
+differences against `H(0)` and need no AD:
+
+    ∂H/∂Re ηₐ = H(eₐ) - H(0),   ∂H/∂Im ηₐ = H(i·eₐ) - H(0),
+
+and for complex `η` the returned matrix is the Wirtinger derivative `∂H/∂ηₐ = ½(∂H/∂Re ηₐ - i ∂H/∂Im ηₐ)`,
+matching what the previous Zygote-based implementation returned.
 
 """
 function build_H_BdG_derivatives(H_BdG_func::Function, η::AbstractVector{<:Number}, N::Int)
-    dimH = 2 * N
-    n_entries = dimH * dimH
-    
-    T = eltype(H_BdG_func(η, N))
+    S = eltype(η)
+    e = zeros(S, length(η))
+    H0 = Matrix(H_BdG_func(e, N))   # affine offset H(0)
 
-    dHs = Vector{Matrix{T}}(undef, length(η))
-    if T <: AbstractFloat
-        f = θ -> vec(Matrix(H_BdG_func(θ, N)))
-        J = Zygote.jacobian(f, η)[1]  # (2*dimH^2) x length(η)
-
-        for a in eachindex(η)
-            dH_real = reshape(@view(J[1:n_entries, a]), dimH, dimH)
-            dHs[a] = dH_real
+    dHs = Vector{Matrix{eltype(H0)}}(undef, length(η))
+    for a in eachindex(η)
+        e[a] = one(S)
+        dH = Matrix(H_BdG_func(e, N)) .- H0         # ∂H/∂Re ηₐ
+        if S <: Complex
+            e[a] = im * one(S)
+            dH_im = Matrix(H_BdG_func(e, N)) .- H0  # ∂H/∂Im ηₐ
+            dH = 0.5 .* (dH .- im .* dH_im)         # Wirtinger ∂H/∂ηₐ
         end
-    elseif T <: Complex
-        η_reim = vcat(real.(η), imag.(η))
-
-        function f_reim(x)
-            n = length(x) ÷ 2
-            θ = ComplexF64.(x[1:n] .+ im .* x[n+1:end])
-
-            H_vec = vec(Matrix(H_BdG_func(θ, N)))
-
-            return vcat(real.(H_vec), imag.(H_vec))
-        end
-
-        J = Zygote.jacobian(f_reim, η_reim)[1]
-
-        nη = length(η)
-
-        for a in 1:nη
-            # derivative wrt Re η_a
-            dH_re = reshape(@view(J[1:n_entries, a]), dimH, dimH) .+
-                    im .* reshape(@view(J[n_entries+1:2n_entries, a]), dimH, dimH)
-
-            # derivative wrt Im η_a
-            dH_im = reshape(@view(J[1:n_entries, nη+a]), dimH, dimH) .+
-                    im .* reshape(@view(J[n_entries+1:2n_entries, nη+a]), dimH, dimH)
-
-            # Correct Wirtinger derivative
-            dH = 0.5 .* (dH_re .- im .* dH_im)
-
-            # enforce Hermiticity only numerically
-            # dH = 0.5 .* (dH + dH')
-
-            dHs[a] = dH
-        end
+        e[a] = zero(S)
+        dHs[a] = dH
     end
-    
+
     return dHs
 end
 function build_H_BdG_derivatives(GS::GaussianState)
