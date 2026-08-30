@@ -72,7 +72,7 @@ The struct also includes the variational parameters η used to construct H_BdG.
 - `N::Int`: The number of sites.
 - `parity_sector::Int`: The parity sector of the state, which can be either 0 (even) or 1 (odd).
 - `target_state::Int`: The target state index, which can be 0 for the ground state, 1 for the first excited state, and so on up to the Nth mode.
-- `target_Sz::Union{Nothing, Float64}`: The Sz sector (total magnetization `Σ_m s_m n_m`) to hold fixed. 
+- `target_Sz::Union{Nothing, Real}`: The Sz sector (total magnetization `Σ_m s_m n_m`) to hold fixed. 
         `target_state` decides how the quasi-particle modes are filled in the given Sz sector. E.g. `target_state=0` picks the lowest energy state in the given Sz sector, `target_state=1` picks the second lowest energy state in the given Sz sector, and so on.
         If `nothing`, the modes are filled specified by `target_state` only.
 - `n_flavours::Int`: The number of parton species per lattice site (2S+1). The convention is that the species are enumerated from 1 to 2S+1.
@@ -88,14 +88,14 @@ mutable struct GaussianState <: AbstractTrialState
     N::Int # number of sites
     parity_sector::Int # parity sector of the state: either 0 (even) or 1 (odd)
     target_state::Int # ground state (0), first excited state (1) and so on up to the Nth mode
-    target_Sz::Union{Nothing, Float64} # Sz sector (total magnetization) to hold fixed. `nothing` fills by mode index instead and `target_state` is used.
+    target_Sz::Union{Nothing, Real} # Sz sector (total magnetization) to hold fixed. `nothing` fills by mode index instead and `target_state` is used.
     n_flavours::Int # parton species per lattice site (2S+1). We use the convention that the species are enumerated from 1:2S+1
     occ_ref::Vector{Int} # quasiparticle occupation reference. Important for selecting the correct Bogoliubov vacuum in Bloch-Messiah decomposition.
     slater_loggrad_cache::SlaterLogGradientCache # Cache for efficient gradient calculations in Slater determinant states
     amplitude_cache::GaussianAmplitudeCache # Cache for efficient amplitude calculations
 
     function GaussianState(H_BdG_func::Function, N::Int; η=Float64[], parity_sector::Int=0, target_state::Int=0,
-                           target_Sz=nothing, n_flavours::Int=1)
+                           target_Sz::Union{Nothing, Real}=nothing, n_flavours::Int=1)
         @assert parity_sector == 0 || parity_sector == 1 "Parity must be either 0 (even) or 1 (odd)"
         Γ, occ_ref = get_Γ_from_H_BdG(H_BdG_func(η, N), parity_sector; target_state=target_state, target_Sz=target_Sz, n_flavours=n_flavours)
         slater_loggrad_cache = build_slater_loggradient_cache(H_BdG_func, η, N; parity_sector=parity_sector, target_state=target_state, target_Sz=target_Sz, n_flavours=n_flavours)
@@ -673,7 +673,7 @@ function build_slater_loggradient_cache(
     N::Int;
     parity_sector::Int=0,
     target_state::Int=0,
-    target_Sz=nothing,
+    target_Sz::Union{Nothing, Real}=nothing,
     n_flavours::Int=1
 )
     H = Matrix(H_BdG_func(η, N))
@@ -999,7 +999,7 @@ Given a Bogoliubov-de Gennes Hamiltonian matrix `H_BdG` and an occupation string
 - `n_flavours::Int`: The number of flavours (2S+1 for spin-S systems). If set to 1, the BdG Hamiltonian has no spin parent Hamiltonian ( For example if we look at the bare Hubbard Hamiltonian which is already fermionic ).
 
 """
-function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::Int=0, target_Sz::Union{Int,Nothing}=nothing, n_flavours::Int=1)
+function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::Int=0, target_Sz::Union{Nothing, Real}=nothing, n_flavours::Int=1)
     N = size(H_BdG, 1) ÷ 2
 
     # Diagonalize the BdG Hamiltonian with the Bogoliubov transformation M
