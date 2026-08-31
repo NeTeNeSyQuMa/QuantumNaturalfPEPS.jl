@@ -296,6 +296,7 @@ function build_general_H_BdG_2D_NN_fixed_Sz(η::AbstractVector{<:Number}, Lx::In
     H_BdG = Matrix{eltype(η)}([T D; D' -transpose(T)])
     return Hermitian(H_BdG)
 end
+build_general_H_BdG_2D_NN_fixed_Sz(η::AbstractVector{<:Number}, N::Int, n_flavours::Int) = build_general_H_BdG_2D_NN_fixed_Sz(η::AbstractVector{<:Number}, Int(sqrt(N)), Int(sqrt(N)), n_flavours)
 
 parton_site(m::Int, n_flavours::Int) = (m - 1) ÷ n_flavours + 1 # original site index of a parton mode
 parton_flavour(m::Int, n_flavours::Int) = mod1(m, n_flavours)   # flavour index of a parton mode (1..n_flavours)
@@ -592,10 +593,18 @@ function build_amplitude_cache(H_BdG::Hermitian, parity::Int, occ_ref::Vector{In
 
     D, Ubar, Vbar, _ = get_mats_from_bloch_messiah(Dmat_prime, UVmat_prime, Cmat_prime)
 
-    # Vbar_trunc has the structure [ I 0; 0 ⨁_p (i v_p σ_y)] so we need to skip the identity block
-    vp_prod_start_ind = findlast(x -> abs(x) ≈ 1.0, diag(Vbar))
-    vp_prod_start_ind = vp_prod_start_ind === nothing ? 2 : vp_prod_start_ind + 2
-    v_prod = prod([Vbar[i-1, i] for i in vp_prod_start_ind:2:size(Vbar, 2)])
+    #=
+        Vbar is block diagonal in the Bloch-Messiah canonical basis: a paired level contributes
+        v_p·(iσ_y), whose det is v_p², and a fully occupied ("blocked") level contributes an
+        orthogonal 2×2 block, whose det is ±1 and which must count as 1 in the norm. The pairing
+        product is therefore just
+
+            ∏_p v_p = sqrt(|det(Vbar)|)
+
+        with no block bookkeeping at all. It is also gauge invariant as for an orthogonal gauge O (-> det(O)=1), we 
+        have: det(O Vbar Oᵀ) = det(O) · det(Vbar) · det(Oᵀ) = det(Vbar)
+    =#
+    v_prod = exp(logabsdet(Vbar)[1] / 2) # = exp(log|det Vbar| / 2) = sqrt(|det Vbar|) = ∏_p v_p
 
     # compute full matrices for overlap
     R_mat_full = D * Vbar # has the same ordering as H
@@ -986,6 +995,29 @@ function select_occ_ref_by_target_Sz(M::AbstractMatrix, E::AbstractVector, parit
 end
 
 """
+    get_Sz_from_Γ(Γ, n_flavours)
+    get_Sz_from_Γ(GS::GaussianState)
+
+Returns the `⟨Ŝz⟩ = Σ_m s_m n_m` of a Gaussian state, from its covariance matrix.
+
+In the Majorana (qq-ordered) convention we use, the parton mode occupations is given by:
+```
+    n_m = ⟨c†_m c_m⟩ = 1/2 - Γ[2m-1, 2m]
+```
+
+# Note:
+
+This is an expectation value and it is a sharp quantum number only when the state actually sits in an
+Sz sector e.g. was build using the `target_Sz` keyword.
+
+"""
+function get_Sz_from_Γ(Γ::AbstractMatrix, n_flavours::Int)
+    N = size(Γ, 1) ÷ 2 # number of parton modes
+    return sum(sz_per_mode(N, n_flavours)[m] * (0.5 - real(Γ[2m-1, 2m])) for m in 1:N)
+end
+get_Sz_from_Γ(GS::GaussianState) = get_Sz_from_Γ(GS.Γ, GS.n_flavours)
+
+"""
     get_Γ_from_H_BdG(H_BdG::Hermitian, occ_string::Vector{Int})
 
 Given a Bogoliubov-de Gennes Hamiltonian matrix `H_BdG` and an occupation string `occ_string`, this function computes the correlation matrix Γ in the Majorana basis (qq-ordered). 
@@ -998,6 +1030,8 @@ Given a Bogoliubov-de Gennes Hamiltonian matrix `H_BdG` and an occupation string
     Requires a Sz-conserving `H_BdG`.
 - `n_flavours::Int`: The number of flavours (2S+1 for spin-S systems). If set to 1, the BdG Hamiltonian has no spin parent Hamiltonian ( For example if we look at the bare Hubbard Hamiltonian which is already fermionic ).
 
+# Note:
+With our convention here,  Γ*Γ' ≈ I ./ 4, unlike in other literature where Γ*Γ' ≈ I. The factor of 1/4 comes from the fact that we define the Majorana operators as γ = (c + c†)/√2, which leads to a factor of 1/2 in the covariance matrix.
 """
 function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::Int=0, target_Sz::Union{Nothing, Real}=nothing, n_flavours::Int=1)
     N = size(H_BdG, 1) ÷ 2

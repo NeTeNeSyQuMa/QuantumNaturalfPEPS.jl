@@ -2,24 +2,6 @@ using Test
 using LinearAlgebra
 using QuantumNaturalfPEPS
 
-Lx, Ly = 3, 3
-L = Lx * Ly
-η = ones(QuantumNaturalfPEPS.get_max_num_MF_params_NN(Lx, Ly))
-H = QuantumNaturalfPEPS.build_general_H_BdG_2D_NN(η, Lx, Ly)
-
-T = H[1:L, 1:L]
-D = H[1:L, L+1:end]
-display(D)
-
-nflavours = 2
-N = nflavours * L
-η = ones(QuantumNaturalfPEPS.get_max_num_MF_params_NN_parton(Lx, Ly, nflavours))
-H = QuantumNaturalfPEPS.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nflavours)
-
-T = H[1:N, 1:N]
-D = H[1:N, N+1:end]
-display(D)
-
 @testset "Fixed Sz sector" begin
     @testset "Parton indexing" begin
         Lx, Ly = 2,2
@@ -82,8 +64,9 @@ display(D)
     end
 end
 
+# checks if the BdG Hamiltonian preserves Sz
 @testset "BdG matrix (NN) with fixed Sz sector" begin
-    function check_fixed_flavour_BdG(Lx,Ly, nflavours)
+    function check_fixed_Sz_BdG(Lx,Ly, nflavours)
         parton_site = QuantumNaturalfPEPS.parton_site
         parton_flavour = QuantumNaturalfPEPS.parton_flavour
 
@@ -133,336 +116,149 @@ end
     end
 
     @testset "S=1/2" begin
-        check_fixed_flavour_BdG(2,2,2)
-        check_fixed_flavour_BdG(3,2,2)
+        check_fixed_Sz_BdG(2,2,2)
+        check_fixed_Sz_BdG(3,2,2)
     end
 
     @testset "S=1" begin
-        check_fixed_flavour_BdG(3,3,3)
-        check_fixed_flavour_BdG(2,3,3)
+        check_fixed_Sz_BdG(3,3,3)
+        check_fixed_Sz_BdG(2,3,3)
     end
 end
 
-# # Sz read straight off the covariance matrix: n_m = 1/2 - Γ[2m-1, 2m] in the Majorana (qq) convention.
-# # With pairing switched on the individual n_m are fractional, but this combination is exactly a
-# # half-integer whenever the mean field conserves Sz -- which is what makes it a usable assertion.
-# function Sz_from_Γ(Γ, nf)
-#     N = size(Γ, 1) ÷ 2
-#     s = [(nf + 1) / 2 - QNF.parton_flavour(m, nf) for m in 1:N]
-#     n = [0.5 - real(Γ[2m-1, 2m]) for m in 1:N]
-#     return sum(s .* n)
-# end
+#=
+    Physical test case 1: hopping only, no pairing.
 
-# @testset "Fixed Sz sector" begin
+    A flavour-split on-site term (μ = -h on one flavour, +h on all others, with h well above the
+    hopping bandwidth) separates the flavour bands, so the ground state fills every mode of that one
+    flavour and nothing else. With no pairing the state is a Slater determinant, so every occupation is
+    exactly 0 or 1 and the whole state is known in closed form -- which makes this the case that pins
+    the sector selection independently of the Bloch-Messiah / pfaffian machinery.
+=#
+@testset "hopping only: fully polarized ground state (analytic)" begin
+    QNF = QuantumNaturalfPEPS
 
-#     @testset "flavour-conserving mean field" begin
-#         for (Lx, Ly, nf) in ((2, 2, 2), (3, 2, 2), (2, 2, 3), (2, 2, 4))
-#             L = Lx * Ly
-#             N = nf * L
-#             nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
-#             η = randn(nη)
-#             H = QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)
+    # μ = -h on the filled flavour, +h on all others, uniform hopping, pairing left at exactly zero.
+    function polarized_η(Lx, Ly, nf, f_fill; h=8.0, t=0.2)
+        N = nf * Lx * Ly
+        η = zeros(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
+        η[1:N] .= [QNF.parton_flavour(m, nf) == f_fill ? -h : h for m in 1:N]
+        nhop = nf * (QNF.get_max_num_hopping_x_NN(Lx, Ly) + QNF.get_max_num_hopping_y_NN(Lx, Ly))
+        η[N+1 : N+nhop] .= -t
+        return η
+    end
 
-#             T = H[1:N, 1:N]
-#             D = H[1:N, N+1:end]
+    # Lx*Ly is odd in two of these, so S*Lx*Ly is a genuine half-integer target
+    for (Lx, Ly, nf) in ((2, 2, 2), (3, 1, 2), (3, 3, 2), (2, 2, 3))
+        L = Lx * Ly
+        N = nf * L
+        # the polarized state holds exactly L partons, so its fermion parity is L mod 2
+        ps = L % 2
+        H_func(θ, n) = QNF.build_general_H_BdG_2D_NN_fixed_Sz(θ, Lx, Ly, nf)
 
-#             @test ishermitian(H)
-#             @test norm(D + transpose(D), Inf) < 1e-12
+        @testset "$(Lx)x$(Ly), n_flavours=$nf" begin
+            for f_fill in 1:nf
+                η = polarized_η(Lx, Ly, nf, f_fill)
+                s_fill = QNF.sz_per_mode(nf, nf)[f_fill]   # Sz carried by the filled flavour
+                Sz_expected = s_fill * L
 
-#             # [H_BdG, Ŝz] = 0 for arbitrary η, because the violating terms have no parameter at all
-#             s = [(nf + 1) / 2 - QNF.parton_flavour(m, nf) for m in 1:N]
-#             Sz = Diagonal(vcat(s, -s))
-#             @test norm(Matrix(H) * Sz - Sz * Matrix(H), Inf) < 1e-12
+                # the pairing block really is zero, so this is a pure Slater determinant
+                @test norm(Matrix(H_func(η, N))[1:N, N+1:end], Inf) == 0.0
 
-#             for m in 1:N, m2 in 1:N
-#                 f1 = QNF.parton_flavour(m, nf)
-#                 f2 = QNF.parton_flavour(m2, nf)
-#                 f1 != f2          && @test T[m, m2] == 0   # no flavour-changing hopping
-#                 f1 + f2 != nf + 1 && @test D[m, m2] == 0   # no Sz-charged pairing
-#             end
-#         end
+                # --- the plain ground state already is the polarized state ------------------------
+                GS = QNF.GaussianState(H_func, N; η=η, parity_sector=ps, target_state=0, n_flavours=nf)
+                n_occ = [0.5 - real(GS.Γ[2m-1, 2m]) for m in 1:N]
+                n_exact = [QNF.parton_flavour(m, nf) == f_fill ? 1.0 : 0.0 for m in 1:N]
 
-#         # n_flavours = 1 must reproduce the existing spinless parameter count
-#         for (Lx, Ly) in ((2, 2), (3, 3), (3, 4))
-#             @test QNF.get_max_num_MF_params_NN_parton(Lx, Ly, 1) == QNF.get_max_num_MF_params_NN(Lx, Ly)
-#         end
-#     end
+                @test maximum(abs, n_occ .- n_exact) < 1e-12          # occupations are exactly 0 / 1
+                @test isapprox(QNF.get_Sz_from_Γ(GS), Sz_expected; atol=1e-12)
+                @test QNF.getParity(GS.Γ) == ps
 
-#     @testset "occ_ref selection lands in the requested sector" begin
-#         for (Lx, Ly, nf) in ((2, 2, 2), (3, 2, 2), (2, 2, 3))
-#             L = Lx * Ly
-#             N = nf * L
-#             nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
-#             H = QNF.build_general_H_BdG_2D_NN_fixed_Sz(randn(nη), Lx, Ly, nf)
+                # --- requesting that Sz must reproduce the very same state ------------------------
+                GS_t = QNF.GaussianState(H_func, N; η=η, parity_sector=ps, target_Sz=Sz_expected, n_flavours=nf)
+                @test isapprox(QNF.get_Sz_from_Γ(GS_t), Sz_expected; atol=1e-12)
+                @test GS_t.Γ ≈ GS.Γ
+                @test GS_t.occ_ref == zeros(Int, N)   # the Bogoliubov vacuum already is the sector
+            end
 
-#             for parity in 0:1
-#                 reached = 0
-#                 for twoSz in -N:N
-#                     target = twoSz / 2
-#                     local Γ, occ
-#                     try
-#                         Γ, occ = QNF.get_Γ_from_H_BdG(H, parity; target_Sz=target, n_flavours=nf)
-#                     catch e
-#                         e isa AssertionError || rethrow()
-#                         continue   # not reachable in this parity sector
-#                     end
-#                     reached += 1
+            # --- the opposite polarization is the mirror state ------------------------------------
+            # flavour 1 carries +S, flavour nf carries -S
+            GS_up = QNF.GaussianState(H_func, N; η=polarized_η(Lx, Ly, nf, 1),
+                                      parity_sector=ps, target_Sz=+(nf - 1) / 2 * L, n_flavours=nf)
+            GS_dn = QNF.GaussianState(H_func, N; η=polarized_η(Lx, Ly, nf, nf),
+                                      parity_sector=ps, target_Sz=-(nf - 1) / 2 * L, n_flavours=nf)
+            @test isapprox(QNF.get_Sz_from_Γ(GS_up), -QNF.get_Sz_from_Γ(GS_dn); atol=1e-12)
+            @test isapprox(QNF.get_Sz_from_Γ(GS_up), (nf - 1) / 2 * L; atol=1e-12)
 
-#                     @test isapprox(Sz_from_Γ(Γ, nf), target; atol=1e-9)   # the requested sector
-#                     @test isapprox(Γ * Γ, -I(2N) / 4; atol=1e-9)          # still a pure Gaussian state
-#                     @test isapprox(Γ, -transpose(Γ); atol=1e-10)
-#                     @test QNF.getParity(Γ) == parity                      # parity stays an independent knob
-#                     @test length(occ) == N && all(x -> x in (0, 1), occ)
-#                 end
-#                 @test reached > 0
-#             end
-#         end
-#     end
+            if nf == 2
+                # For S=1/2 the maximally polarized state is unique: it needs all L modes of one
+                # flavour and nothing else, so its parton count -- and hence its parity -- is fixed.
+                # The same Sz in the other parity sector therefore does not exist, and must be
+                # rejected rather than silently answered with some other state.
+                # (Not true for nf >= 3, where Sz = S*L is also reachable at a different parton count.)
+                @test_throws AssertionError QNF.GaussianState(H_func, N; η=polarized_η(Lx, Ly, nf, 1),
+                                                              parity_sector=1 - ps, target_Sz=L / 2, n_flavours=nf)
+            end
+        end
+    end
+end
 
-#     @testset "reference is energy-minimal and deterministic" begin
-#         Lx, Ly, nf = 2, 2, 2
-#         N = nf * Lx * Ly
-#         nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
-#         H = QNF.build_general_H_BdG_2D_NN_fixed_Sz(randn(nη), Lx, Ly, nf)
+#=
+    Physical test case 2: hopping AND pairing, both switched on.
 
-#         _, o1 = QNF.get_Γ_from_H_BdG(H, 0; target_Sz=0.0, n_flavours=nf)
-#         _, o2 = QNF.get_Γ_from_H_BdG(H, 0; target_Sz=0.0, n_flavours=nf)
-#         @test o1 == o2
-
-#         # brute force every reference and confirm the DP found the cheapest one in the sector
-#         E, M = QNF.bogoliubov(H)
-#         parity_vac = QNF.getParity(QNF.get_Γ0_from_H_BdG(H))
-#         occ = QNF.select_occ_ref_by_Sz(M, E, 0, parity_vac, 0.0, nf)
-#         cost = sum(E[k] for k in 1:N if occ[k] == 1; init=0.0)
-
-#         U, V = QNF.get_bogoliubov_blocks(M)
-#         s = [(nf + 1) / 2 - QNF.parton_flavour(m, nf) for m in 1:N]
-#         Sz_vac = sum(s .* vec(sum(abs2.(V), dims=2)))
-#         q = vec(transpose(s) * (abs2.(U) .- abs2.(V)))
-
-#         best = Inf
-#         for mask in 0:(2^N - 1)
-#             o = [(mask >> (k - 1)) & 1 for k in 1:N]
-#             isapprox(Sz_vac + sum(o .* q), 0.0; atol=1e-9) || continue
-#             (sum(o) % 2) == parity_vac % 2 || continue
-#             best = min(best, sum(E[k] for k in 1:N if o[k] == 1; init=0.0))
-#         end
-#         @test isapprox(cost, best; atol=1e-9)
-#     end
-
-#     @testset "Zeeman field shifts the vacuum but not the selection" begin
-#         Lx, Ly, nf = 2, 2, 2
-#         N = nf * Lx * Ly
-#         nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
-#         η = randn(nη)
-#         η[1:N] .= [QNF.parton_flavour(m, nf) == 1 ? -0.8 : 0.8 for m in 1:N]
-#         H = QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)
-
-#         for target in (-1.0, 0.0, 1.0)
-#             Γ, _ = QNF.get_Γ_from_H_BdG(H, 0; target_Sz=target, n_flavours=nf)
-#             @test isapprox(Sz_from_Γ(Γ, nf), target; atol=1e-9)
-#         end
-#     end
-
-#     @testset "an Sz-breaking mean field is rejected" begin
-#         Lx, Ly = 2, 2
-#         H = QNF.build_general_H_BdG_2D_NN(randn(QNF.get_max_num_MF_params_NN(Lx, Ly)), Lx, Ly)
-#         @test_throws AssertionError QNF.get_Γ_from_H_BdG(H, 0; target_Sz=0.0, n_flavours=2)
-#     end
-
-#     @testset "default (index-and-parity) fill is unchanged" begin
-#         Lx, Ly = 2, 2
-#         H = QNF.build_general_H_BdG_2D_NN(randn(QNF.get_max_num_MF_params_NN(Lx, Ly)), Lx, Ly)
-#         Γa, oa = QNF.get_Γ_from_H_BdG(H, 0)
-#         Γb, ob = QNF.get_Γ_from_H_BdG(H, 0; target_state=1)
-#         @test QNF.getParity(Γa) == 0
-#         @test QNF.getParity(Γb) == 0
-#         @test sum(oa) + 2 == sum(ob)
-#     end
-
-#     @testset "write! holds the sector across parameter updates" begin
-#         Lx, Ly, nf = 2, 2, 2
-#         N = nf * Lx * Ly
-#         nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
-#         H_func = (η, n) -> QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)
-
-#         GS = QNF.GaussianState(H_func, N; η=randn(nη), parity_sector=0, target_Sz=1.0, n_flavours=nf)
-#         @test isapprox(Sz_from_Γ(GS.Γ, nf), 1.0; atol=1e-9)
-
-#         for _ in 1:5
-#             QNF.write!(GS, randn(nη))
-#             @test isapprox(Sz_from_Γ(GS.Γ, nf), 1.0; atol=1e-9)
-#             @test QNF.getParity(GS.Γ) == 0
-#         end
-#     end
-# end
-
-@testset "target_state ladder inside a fixed Sz sector" begin
+    With pairing the occupations are fractional and the amplitudes go through the Bloch-Messiah /
+    pfaffian path, so this exercises the machinery end to end. Uniform η is included deliberately: it
+    is the fully spin-degenerate mean field, i.e. the one that fails without the Sz alignment of the
+    degenerate Bogoliubov multiplets, and it is where an optimization starts.
+=#
+@testset "hopping + pairing: ground state lands in the requested Sz sector" begin
     using Random
     QNF = QuantumNaturalfPEPS
 
-    # Brute-force reference: enumerate every occ ∈ {0,1}^N, keep the ones that land in the
-    # (target_Sz, parity) sector, sort by quasiparticle energy. The DP must reproduce that ordering.
-    function sector_states(M, E, parity_sector, parity_vac, target_Sz, nf)
-        N = size(M, 1) ÷ 2
-        U, V = QNF.get_bogoliubov_blocks(M)
-        s = [(nf + 1) / 2 - QNF.parton_flavour(m, nf) for m in 1:N]
-        q = vec(transpose(s) * (abs2.(U) .- abs2.(V)))
-        Sz_vac = sum(s .* vec(sum(abs2.(V), dims=2)))
-        par_t = (parity_sector + parity_vac) % 2
-        out = Float64[]
-        for idx in 0:(2^N - 1)
-            occ = digits(idx, base=2, pad=N)
-            sum(occ) % 2 == par_t || continue
-            isapprox(Sz_vac + sum(occ .* q), target_Sz; atol=1e-8) || continue
-            push!(out, sum(occ .* E[1:N]))
-        end
-        return sort!(out)
-    end
+    for (Lx, Ly, nf) in ((2, 2, 2), (2, 2, 3))
+        L = Lx * Ly
+        N = nf * L
+        S = (nf - 1) / 2
+        H_func(θ, n) = QNF.build_general_H_BdG_2D_NN_fixed_Sz(θ, Lx, Ly, nf)
+        nη = QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)
+        Random.seed!(2026 + nf)
 
-    for (nf, Sz_targets) in ((2, (-1.0, -0.5, 0.0, 0.5, 1.0)), (3, (-1.0, 0.0, 1.0, 2.0)))
-        @testset "n_flavours = $nf" begin
-            Lx, Ly = 2, 2
-            N = nf * Lx * Ly
-            Random.seed!(2024 + nf)
-            for _ in 1:3
-                η = randn(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
-                H = Hermitian(Matrix(QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)))
-                E, M = QNF.bogoliubov(H)
-                parity_vac = QNF.getParity(QNF.get_Γ0_from_H_BdG(H))
+        @testset "$(Lx)x$(Ly), n_flavours=$nf" begin
+            for (η_label, η) in (("uniform", ones(nη)), ("random", randn(nη)))
+                @testset "$η_label eta" begin
+                    # the mean field conserves Sz for whatever η it is handed
+                    Hm = Matrix(H_func(η, N))
+                    Sz_op = QNF.sz_operator_BdG(N, nf)
+                    @test norm(Hm * Sz_op - Sz_op * Hm, Inf) < 1e-12 # commutes with Sz
 
-                for ps in (0, 1), tSz in Sz_targets
-                    ref = sector_states(M, E, ps, parity_vac, tSz, nf)
-                    isempty(ref) && continue
+                    n_reachable = 0
+                    for ps in (0, 1), tSz in (-S*L):0.5:(S*L)
+                        local GS
+                        try
+                            GS = QNF.GaussianState(H_func, N; η=η, parity_sector=ps,
+                                                   target_Sz=tSz, n_flavours=nf)
+                        catch err
+                            # not every (Sz, parity) pair exists; it has to say so rather than
+                            # silently hand back a state from a different sector
+                            err isa AssertionError || rethrow()
+                            continue
+                        end
+                        n_reachable += 1
+                        configs() = (digits(i, base=2, pad=N) for i in 0:(2^N - 1))
 
-                    for ts in 0:min(length(ref) - 1, 4)
-                        occ = QNF.select_occ_ref_by_target_Sz(M, E, ps, parity_vac, tSz, ts, nf)
-                        # ts-th lowest energy in the sector ...
-                        @test isapprox(sum(occ .* E[1:N]), ref[ts + 1]; atol=1e-9)
-                        # ... and the reference actually sits in the requested parity sector
-                        @test sum(occ) % 2 == (ps + parity_vac) % 2
+                        @test isapprox(QNF.get_Sz_from_Γ(GS), tSz; atol=1e-9)   # requested sector
+                        @test QNF.getParity(GS.Γ) == ps                         # requested parity
+                        @test isapprox(sum(QNF.get_prob(GS, c) for c in configs()), 1.0; atol=1e-9) # normalization correct
+                        @test isapprox(sum(abs2(QNF.get_amplitude(GS, c)) for c in configs()), 1.0; atol=1e-9) # normalization correct
+                        @test maximum(abs(QNF.get_prob(GS, c) - abs2(QNF.get_amplitude(GS, c))) for c in configs()) < 1e-9 # probabilities and amplitudes consistent
                     end
+                    @test n_reachable > 0 # at least one Sz sector must be reachable for any η
 
-                    # asking past the last state of the sector must fail loudly, not wrap around
-                    @test_throws AssertionError QNF.select_occ_ref_by_target_Sz(
-                        M, E, ps, parity_vac, tSz, length(ref), nf)
+                    # a target far outside the reachable range must raise, not clamp
+                    @test_throws AssertionError QNF.GaussianState(H_func, N; η=η, parity_sector=0,
+                                                                  target_Sz=S * L + 5, n_flavours=nf)
                 end
             end
         end
     end
-
-    @testset "ladder through GaussianState" begin
-        nf, Lx, Ly = 2, 2, 2
-        N = nf * Lx * Ly
-        Random.seed!(3)
-        η = randn(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
-        H_func(θ, n) = QNF.build_general_H_BdG_2D_NN_fixed_Sz(θ, Lx, Ly, nf)
-        E, _ = QNF.bogoliubov(Hermitian(Matrix(H_func(η, N))))
-
-        occs = [QNF.GaussianState(H_func, N; η=η, parity_sector=0, target_state=ts,
-                                  target_Sz=0.0, n_flavours=nf).occ_ref for ts in 0:3]
-        energies = [sum(o .* E[1:N]) for o in occs]
-
-        @test issorted(energies)                       # walks *up* the ladder
-        @test length(unique(occs)) == length(occs)     # and never repeats a state
-        @test all(o -> sum(o) % 2 == 0, occs)          # parity_vac = 0 here, so parity_sector 0 ⇒ even
-    end
-end
-
-@testset "Sz alignment of degenerate Bogoliubov multiplets" begin
-    using Random
-    QNF = QuantumNaturalfPEPS
-
-    # Sz read straight off the covariance matrix: n_m = 1/2 - Γ[2m-1, 2m] in the Majorana (qq) convention.
-    function Sz_from_Γ(Γ, nf)
-        N = size(Γ, 1) ÷ 2
-        s = QNF.sz_per_mode(N, nf)
-        return sum(s[m] * (0.5 - real(Γ[2m-1, 2m])) for m in 1:N)
-    end
-
-    @testset "a spin-symmetric mean field needs the rotation" begin
-        # Regression: `eigen` returns an arbitrary basis inside a degenerate eigenspace, so for a
-        # uniform (fully spin-degenerate) mean field it hands back superpositions of the ±Sz partners.
-        # The quasiparticle charges then come out fractional even though ‖[H, Ŝz]‖ is exactly 0, and
-        # select_occ_ref_by_target_Sz used to reject the Hamiltonian as non-Sz-conserving.
-        for (nf, Lx, Ly) in ((2, 2, 2), (3, 2, 2), (2, 3, 2), (2, 3, 3))
-            N = nf * Lx * Ly
-            η = ones(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
-            H = Hermitian(Matrix(QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)))
-            Sz_op = QNF.sz_operator_BdG(N, nf)
-            s = QNF.sz_per_mode(N, nf)
-
-            @test norm(H * Sz_op - Sz_op * H, Inf) < 1e-12   # the mean field really does conserve Sz
-
-            E, M0 = QNF.bogoliubov(H)
-            charge_dev(Mx) = begin
-                U, V = QNF.get_bogoliubov_blocks(Mx)
-                q = vec(transpose(s) * (abs2.(U) .- abs2.(V)))
-                maximum(abs, 2 .* q .- round.(2 .* q))
-            end
-
-            @test charge_dev(M0) > 1e-3          # unrotated: fractional charges, the bug
-            M = QNF.align_bogoliubov_to_Sz(H, E, M0, nf)
-            @test charge_dev(M) < 1e-9           # rotated: quantised
-
-            # the rotation must leave M a valid Bogoliubov transformation ...
-            U, V = QNF.get_bogoliubov_blocks(M)
-            @test norm(M' * M - I, Inf) < 1e-10
-            @test norm(U'U + V'V - I, Inf) < 1e-10
-            @test norm(transpose(U) * V + transpose(V) * U, Inf) < 1e-10
-            # ... diagonalizing the same H with the same spectrum ...
-            @test norm(M' * H * M - Diagonal(E), Inf) < 1e-10
-            # ... and preserve the particle-hole structure M = [X C(X)]
-            @test M[:, N+1:2N] ≈ vcat(conj.(M[N+1:end, 1:N]), conj.(M[1:N, 1:N]))
-        end
-    end
-
-    @testset "no-op when nothing is degenerate" begin
-        nf, Lx, Ly = 2, 2, 2
-        Random.seed!(3)
-        η = randn(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
-        H = Hermitian(Matrix(QNF.build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, nf)))
-        E, M0 = QNF.bogoliubov(H)
-        @test QNF.align_bogoliubov_to_Sz(H, E, M0, nf) == M0   # bit-identical, W = I
-    end
-
-    @testset "n_flavours = 1 is a no-op" begin
-        Lx, Ly = 2, 2
-        N = Lx * Ly
-        Random.seed!(5)
-        η = randn(QNF.get_max_num_MF_params_NN(Lx, Ly))
-        H = Hermitian(Matrix(QNF.build_general_H_BdG_2D_NN(η, Lx, Ly)))
-        E, M0 = QNF.bogoliubov(H)
-        @test QNF.align_bogoliubov_to_Sz(H, E, M0, 1) === M0
-    end
-
-    @testset "a genuinely Sz-breaking mean field is still rejected" begin
-        # The rotation makes a degenerate multiplet's charges quantised *by construction*, so the
-        # downstream charge check can no longer see a broken mean field — Sz conservation has to be
-        # asserted on H itself. c†_{1↑}c_{1↓} + h.c. changes Sz by 1.
-        nf, Lx, Ly = 2, 2, 2
-        N = nf * Lx * Ly
-        for breaker in (0.4, 1e-3)
-            Hm = Matrix(QNF.build_general_H_BdG_2D_NN_fixed_Sz(
-                ones(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf)), Lx, Ly, nf))
-            Hm[1, 2] += breaker; Hm[2, 1] += breaker
-            Hm[N+1, N+2] -= breaker; Hm[N+2, N+1] -= breaker
-            @test_throws AssertionError QNF.get_Γ_from_H_BdG(Hermitian(Hm), 0; target_Sz=0.0, n_flavours=nf)
-        end
-    end
-
-    @testset "end to end at a uniform mean field" begin
-        nf, Lx, Ly = 2, 2, 2
-        N = nf * Lx * Ly
-        η = ones(QNF.get_max_num_MF_params_NN_parton(Lx, Ly, nf))
-        H_func(θ, n) = QNF.build_general_H_BdG_2D_NN_fixed_Sz(θ, Lx, Ly, nf)
-
-        for tSz in (-2.0, -1.0, 0.0, 1.0, 2.0)
-            GS = QNF.GaussianState(H_func, N; η=η, parity_sector=0, target_Sz=tSz, n_flavours=nf)
-            @test isapprox(Sz_from_Γ(GS.Γ, nf), tSz; atol=1e-9)   # lands in the requested sector
-            @test QNF.getParity(GS.Γ) == 0
-            # the Gaussian distribution still normalizes, i.e. Γ is a sane covariance matrix
-            @test isapprox(sum(QNF.get_prob(GS, digits(i, base=2, pad=N)) for i in 0:(2^N - 1)), 1.0; atol=1e-8)
-        end
-    end
-end
+end;
