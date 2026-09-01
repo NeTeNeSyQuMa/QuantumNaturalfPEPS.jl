@@ -1309,9 +1309,9 @@ function truncated_bloch_messiah(Dmat,UVmat,Cmat)
     D,Ubar,Vbar,C = get_mats_from_bloch_messiah(Dmat, UVmat, Cmat)
 
     # Discard numerically zero columns. The tolerance has to be relative to the largest
-    # column: for a Slater determinant (all pairing amplitudes zero, e.g. a π-flux hopping
-    # state) half the columns of Vbar vanish and their numerical noise floor sits at ~1e-10,
-    # i.e. right on top of an absolute 1e-10 cutoff. A null column then survives truncation,
+    # column: for a near-Slater state (an optimized η whose pairing has decayed to ~1e-9 but
+    # not to zero) half the columns of Vbar carry only leaked pairing at ~1e-10, i.e. right on
+    # top of an absolute 1e-10 cutoff. A null column then survives truncation,
     # Q_mat comes out one dimension too large, and pfaffian() returns 0 for *every*
     # configuration -> logψ = -Inf everywhere -> NaN importance weights.
     # The absolute value is kept as a floor so that a Vbar that is entirely numerical noise
