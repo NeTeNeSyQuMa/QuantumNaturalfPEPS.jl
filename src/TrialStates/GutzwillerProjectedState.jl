@@ -13,7 +13,9 @@ set to zero. Here spin configurations use the PEPS convention `0 => ↑` and
 The projected amplitudes are not normalized; their overall normalization is
 irrelevant for variational Monte Carlo and amplitude ratios.
 """
-struct GutzwillerProjectedState{T<:Number} <: AbstractTrialState
+abstract type AbstractGutzwillerProjectedState <: AbstractTrialState end
+
+struct GutzwillerProjectedState{T<:Number} <: AbstractGutzwillerProjectedState
     occupied_orbitals::Matrix{T}
     N::Int
     Nup::Union{Nothing,Int}
@@ -82,7 +84,7 @@ Base.eltype(::GutzwillerProjectedState{T}) where {T} = T
 Parameters(::GutzwillerProjectedState) = Float64[]
 
 function _gutzwiller_rows(
-    state::GutzwillerProjectedState,
+    state::AbstractGutzwillerProjectedState,
     spin_configuration::AbstractArray{<:Integer},
 )
     length(spin_configuration) == state.N || throw(DimensionMismatch(
@@ -121,7 +123,7 @@ appears when a spin-conserving determinant is factorized into up and down
 blocks.
 """
 function gutzwiller_amplitude(
-    state::GutzwillerProjectedState,
+    state::AbstractGutzwillerProjectedState,
     spin_configuration::AbstractArray{<:Integer},
 )
     rows, number_up = _gutzwiller_rows(state, spin_configuration)
@@ -136,7 +138,7 @@ end
 
 Return the unnormalized configuration weight `|Ψ_G(σ)|²`.
 """
-gutzwiller_weight(state::GutzwillerProjectedState, spin_configuration) =
+gutzwiller_weight(state::AbstractGutzwillerProjectedState, spin_configuration) =
     abs2(gutzwiller_amplitude(state, spin_configuration))
 
 """
@@ -165,7 +167,7 @@ function _gutzwiller_logdet(slater::AbstractMatrix)
 end
 
 function GutzwillerExchangeCache(
-    state::GutzwillerProjectedState,
+    state::AbstractGutzwillerProjectedState,
     spin_configuration::AbstractVector{<:Integer},
 )
     rows, number_up = _gutzwiller_rows(state, spin_configuration)
@@ -266,18 +268,18 @@ function accept_gutzwiller_exchange!(
     return cache
 end
 
-get_amplitude(state::GutzwillerProjectedState, spin_configuration::Vector{Int}) =
+get_amplitude(state::AbstractGutzwillerProjectedState, spin_configuration::Vector{Int}) =
     gutzwiller_amplitude(state, spin_configuration)
 
 function get_prob(
-    state::GutzwillerProjectedState,
+    state::AbstractGutzwillerProjectedState,
     spin_configuration::AbstractVector{<:Integer},
 )
     return gutzwiller_weight(state, spin_configuration)
 end
 
 function get_prob(
-    state::GutzwillerProjectedState,
+    state::AbstractGutzwillerProjectedState,
     spin_configuration::Dict{Int,Int},
 )
     if length(spin_configuration) != state.N ||

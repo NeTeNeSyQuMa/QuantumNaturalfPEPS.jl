@@ -50,9 +50,15 @@ export get_observable
 export triangular_torus_bonds, staggered_pi_flux_hoppings
 export uniform_flux_staggered_pi_hoppings
 export hamiltonian_aux_triangular_torus
-export hamiltonian_J1J2_triangular
-export GutzwillerProjectedState, gutzwiller_project
-export gutzwiller_amplitude, gutzwiller_weight
+export hamiltonian_J1J2_H
+export monopole_state, triangular_aux_gaussian_state
+export triangular_y_hopping_fields, umbrella_hopping_fields
+export cs_hopping_fields
+export y_state, umbrella_state
+export cs_state
+export AbstractGutzwillerProjectedState, GutzwillerProjectedState
+export GutzwillerProjectedGaussianState, gutzwiller_project
+export gutzwiller_amplitude, gutzwiller_weight, gutzwiller_log_gradient
 export GutzwillerExchangeCache, gutzwiller_exchange_ratio
 export accept_gutzwiller_exchange!
 export PartonMeanFieldResult, parton_density_matrix

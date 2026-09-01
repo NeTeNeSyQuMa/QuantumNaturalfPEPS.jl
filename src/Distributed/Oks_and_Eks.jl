@@ -18,8 +18,8 @@ function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum; tri
                               threaded=false, multiproc=false, shared_array=true, async_double_layers=false, verbose=false,
                               fixed_sz_metropolis=false, kwargs...)
     if fixed_sz_metropolis
-        trial_state isa GutzwillerProjectedState || throw(ArgumentError(
-            "fixed_sz_metropolis requires a GutzwillerProjectedState trial_state",
+        trial_state isa AbstractGutzwillerProjectedState || throw(ArgumentError(
+            "fixed_sz_metropolis requires an AbstractGutzwillerProjectedState trial_state",
         ))
         threaded && throw(ArgumentError("fixed_sz_metropolis does not yet support threaded=true"))
         multiproc && throw(ArgumentError("fixed_sz_metropolis does not yet support multiproc=true"))
