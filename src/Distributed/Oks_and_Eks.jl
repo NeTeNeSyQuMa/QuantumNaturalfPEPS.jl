@@ -6,6 +6,8 @@ function compute_importance_weights(logψs, logpcs)
     return exp.(log_ratios .- logZ)
 end
 
+include("Oks_and_Eks_fixed_sz.jl")
+
 function generate_Oks_and_Eks(peps::AbstractPEPS, ham::OpSum; kwargs...)
     hilbert = siteinds(peps)
     ham_op = TensorOperatorSum(ham, hilbert)
@@ -14,7 +16,18 @@ end
 
 function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
                               threaded=false, multiproc=false, shared_array=true, async_double_layers=false, verbose=false,
-                              kwargs...)
+                              fixed_sz_metropolis=false, kwargs...)
+    if fixed_sz_metropolis
+        trial_state isa AbstractGutzwillerProjectedState || throw(ArgumentError(
+            "fixed_sz_metropolis requires an AbstractGutzwillerProjectedState trial_state",
+        ))
+        threaded && throw(ArgumentError("fixed_sz_metropolis does not yet support threaded=true"))
+        multiproc && throw(ArgumentError("fixed_sz_metropolis does not yet support multiproc=true"))
+        async_double_layers && throw(ArgumentError(
+            "fixed_sz_metropolis uses exact D=1 contractions and does not need async double layers",
+        ))
+        return generate_Oks_and_Eks_fixed_sz(peps, ham_op; trial_state, kwargs...)
+    end
     
     local double_layer_update, stop_thread
     if async_double_layers

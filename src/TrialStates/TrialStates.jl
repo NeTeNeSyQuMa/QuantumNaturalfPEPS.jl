@@ -23,3 +23,4 @@ end
 Parameters(Id::IdentityState) = []
 
 include("GaussianState.jl")
+include("GutzwillerProjectedState.jl")

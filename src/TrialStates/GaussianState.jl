@@ -84,17 +84,265 @@ mutable struct GaussianState <: AbstractTrialState
     parity_sector::Int # parity sector of the state: either 0 (even) or 1 (odd)
     target_state::Int # ground state (0), first excited state (1) and so on up to the Nth mode
     occ_ref::Vector{Int} # quasiparticle occupation reference. Important for selecting the correct Bogoliubov vacuum in Bloch-Messiah decomposition.
+    cache_gradients::Bool # whether dense covariance derivatives are cached for variational optimization
     slater_loggrad_cache::SlaterLogGradientCache # Cache for efficient gradient calculations in Slater determinant states
     amplitude_cache::GaussianAmplitudeCache # Cache for efficient amplitude calculations
 
-    function GaussianState(H_BdG_func::Function, N::Int; η=Float64[], parity_sector::Int=0, target_state::Int=0)
+    function GaussianState(
+        H_BdG_func::Function,
+        N::Int;
+        η=Float64[],
+        parity_sector::Int=0,
+        target_state::Int=0,
+        cache_gradients::Bool=true,
+    )
         @assert parity_sector == 0 || parity_sector == 1 "Parity must be either 0 (even) or 1 (odd)"
         Γ, occ_ref = get_Γ_from_H_BdG(H_BdG_func(η, N), parity_sector; target_state=target_state)
-        slater_loggrad_cache = build_slater_loggradient_cache(H_BdG_func, η, N; parity_sector=parity_sector, target_state=target_state)
+        slater_loggrad_cache = cache_gradients ? build_slater_loggradient_cache(
+            H_BdG_func,
+            η,
+            N;
+            parity_sector,
+            target_state,
+        ) : SlaterLogGradientCache(Matrix{ComplexF64}[])
         amplitude_cache = build_amplitude_cache(H_BdG_func(η, N), parity_sector, occ_ref)
-        new(Γ, H_BdG_func, η, N, parity_sector, target_state, occ_ref, slater_loggrad_cache, amplitude_cache)
+        new(
+            Γ,
+            H_BdG_func,
+            η,
+            N,
+            parity_sector,
+            target_state,
+            occ_ref,
+            cache_gradients,
+            slater_loggrad_cache,
+            amplitude_cache,
+        )
     end
 end
+
+function _auxiliary_chemical_potential(
+    Haux::Hermitian,
+    particle_number::Integer,
+    gap_tolerance::Real,
+)
+    number_of_modes = size(Haux, 1)
+    energies = eigvals(Haux)
+    energy_scale = max(maximum(abs, energies), one(eltype(energies)))
+    if particle_number == 0
+        return first(energies) - energy_scale
+    elseif particle_number == number_of_modes
+        return last(energies) + energy_scale
+    end
+
+    fermi_gap = energies[particle_number + 1] - energies[particle_number]
+    fermi_gap > gap_tolerance || throw(ArgumentError(
+        "the requested particle number $particle_number is not closed shell: " *
+        "the Fermi gap is $fermi_gap, which does not exceed " *
+        "gap_tolerance=$gap_tolerance",
+    ))
+    return (energies[particle_number] + energies[particle_number + 1]) / 2
+end
+
+function _triangular_aux_bdg_function(
+    Lx::Integer,
+    Ly::Integer,
+    bonds,
+    hopping_phases::AbstractArray,
+    chemical_potential::Real,
+    number_of_parameters::Integer,
+    expand_parameters::Function=identity,
+)
+    number_of_sites = Lx * Ly
+    number_of_modes = 2number_of_sites
+    return function (parameters, requested_number_of_modes)
+        requested_number_of_modes == number_of_modes || throw(DimensionMismatch(
+            "the triangular auxiliary state contains $number_of_modes modes, " *
+            "got N=$requested_number_of_modes",
+        ))
+        length(parameters) == number_of_parameters || throw(DimensionMismatch(
+            "the triangular auxiliary state requires $number_of_parameters " *
+            "parameters, got $(length(parameters))",
+        ))
+        full_parameters = expand_parameters(parameters)
+        length(full_parameters) == 6number_of_sites || throw(DimensionMismatch(
+            "the expanded triangular auxiliary parameters must have length " *
+            "$(6number_of_sites), got $(length(full_parameters))",
+        ))
+
+        zero_Haux = zeros(ComplexF64, number_of_modes, number_of_modes)
+        H_buffer = Zygote.Buffer(zero_Haux)
+        copyto!(H_buffer, zero_Haux)
+        for bond in bonds
+            x, y = bond.source
+            x2, y2 = bond.target
+            site = (y - 1) * Lx + x
+            amplitude = full_parameters[3(site - 1) + bond.direction]
+            t = amplitude * hopping_phases[x, y, bond.direction]
+            for spin in 1:2
+                i = _spinful_aux_index(x, y, spin, Lx)
+                j = _spinful_aux_index(x2, y2, spin, Lx)
+                H_buffer[i, j] = H_buffer[i, j] + t
+                H_buffer[j, i] = H_buffer[j, i] + conj(t)
+            end
+        end
+
+        field_offset = 3number_of_sites
+        for y in 1:Ly, x in 1:Lx
+            site = (y - 1) * Lx + x
+            Mx = full_parameters[field_offset + 3(site - 1) + 1]
+            My = full_parameters[field_offset + 3(site - 1) + 2]
+            Mz = full_parameters[field_offset + 3(site - 1) + 3]
+            up = _spinful_aux_index(x, y, 1, Lx)
+            down = _spinful_aux_index(x, y, 2, Lx)
+            H_buffer[up, up] = H_buffer[up, up] + Mz / 2
+            H_buffer[down, down] = H_buffer[down, down] - Mz / 2
+            H_buffer[up, down] = H_buffer[up, down] + (Mx - im * My) / 2
+            H_buffer[down, up] = H_buffer[down, up] + (Mx + im * My) / 2
+        end
+
+        particle_block = copy(H_buffer) - chemical_potential * I
+        zero_block = zeros(ComplexF64, number_of_modes, number_of_modes)
+        return Hermitian([
+            particle_block zero_block
+            zero_block -transpose(particle_block)
+        ])
+    end
+end
+
+"""
+    triangular_aux_gaussian_state(
+        Lx,
+        Ly;
+        hopping=1.0,
+        fields=nothing,
+        shear=0,
+        particle_number=Lx * Ly,
+        gap_tolerance=1e-8,
+        cache_gradients=false,
+    )
+
+Construct the trainable, unprojected Gaussian ground state of
+[`hamiltonian_aux_triangular_torus`](@ref). The state contains `2LxLy`
+fermionic modes in the interleaved spin-orbital basis
+`(1↑, 1↓, 2↑, 2↓, ...)` and fills the lowest `particle_number` orbitals.
+
+The real variational parameter vector has length `6LxLy`. Parameters are
+grouped site-by-site in Julia column-major lattice order:
+
+```text
+η = (t₁,₁,₁, t₁,₁,₂, t₁,₁,₃, ..., t_Lx,Ly,3,
+     Mx₁,₁, My₁,₁, Mz₁,₁, ..., Mz_Lx,Ly).
+```
+
+Here `t[x,y,d]` is the independently trainable real magnitude of the outgoing
+bond in triangular direction `d`. The complex phase of every hopping is fixed
+by the corresponding initial value supplied through `hopping`; a zero initial
+hopping is assigned phase one. Thus magnetic fluxes can be held fixed while
+the bond magnitudes are optimized independently. `fields` supplies the initial
+real `Mx`, `My`, and `Mz` values at every site.
+
+The chemical potential is fixed at the midpoint of the initial closed-shell
+gap. Consequently, the particle number remains fixed while optimization stays
+in that gap; a level crossing through the fixed chemical potential changes the
+grand-canonical ground-state filling.
+
+The existing dense Gaussian log-gradient cache scales as
+`O(number_of_parameters * number_of_modes^2)`. It is disabled by default for
+this extensively parameterized state. Set `cache_gradients=true` for small
+systems that will be passed to the current QNG gradient machinery. For
+example, an `18 × 18` lattice would otherwise allocate roughly 52 GiB for the
+covariance derivatives alone.
+
+This constructor returns the full unprojected `2LxLy`-mode parton state. Apply
+`gutzwiller_project(state; Nup)` to obtain its single-occupancy projection for
+use as an `Lx × Ly` spin-1/2 PPEPS trial state.
+"""
+function triangular_aux_gaussian_state(
+    Lx::Integer,
+    Ly::Integer;
+    hopping=1.0,
+    fields=nothing,
+    shear::Integer=0,
+    particle_number::Integer=Lx * Ly,
+    gap_tolerance::Real=1e-8,
+    cache_gradients::Bool=false,
+)
+    initial_Haux = hamiltonian_aux_triangular_torus(
+        Lx,
+        Ly;
+        hopping,
+        fields,
+        shear,
+    )
+    number_of_sites = Lx * Ly
+    number_of_modes = 2number_of_sites
+    0 <= particle_number <= number_of_modes || throw(ArgumentError(
+        "particle_number must lie between 0 and $number_of_modes, " *
+        "got $particle_number",
+    ))
+    gap_tolerance >= 0 || throw(ArgumentError(
+        "gap_tolerance must be nonnegative, got $gap_tolerance",
+    ))
+
+    bonds = triangular_torus_bonds(Lx, Ly; shear)
+    hopping_values = zeros(ComplexF64, Lx, Ly, 3)
+    for bond in bonds
+        x, y = bond.source
+        hopping_values[x, y, bond.direction] = _aux_triangular_hopping(
+            hopping,
+            bond.source,
+            bond.unwrapped_target,
+            bond.direction,
+        )
+    end
+    hopping_phases = map(hopping_values) do value
+        iszero(value) ? one(value) : value / abs(value)
+    end
+
+    field_values = zeros(Float64, Lx, Ly, 3)
+    for y in 1:Ly, x in 1:Lx
+        field = _aux_triangular_field(fields, (x, y))
+        all(isreal, field) || throw(ArgumentError(
+            "the initial fictitious fields must be real",
+        ))
+        field_values[x, y, :] .= real.(field)
+    end
+
+    η = Vector{Float64}(undef, 6number_of_sites)
+    for y in 1:Ly, x in 1:Lx
+        site = (y - 1) * Lx + x
+        for direction in 1:3
+            η[3(site - 1) + direction] = abs(hopping_values[x, y, direction])
+            η[3number_of_sites + 3(site - 1) + direction] =
+                field_values[x, y, direction]
+        end
+    end
+
+    chemical_potential = _auxiliary_chemical_potential(
+        initial_Haux,
+        particle_number,
+        gap_tolerance,
+    )
+    H_BdG_func = _triangular_aux_bdg_function(
+        Lx,
+        Ly,
+        bonds,
+        hopping_phases,
+        chemical_potential,
+        6number_of_sites,
+    )
+
+    return GaussianState(
+        H_BdG_func,
+        number_of_modes;
+        η,
+        parity_sector=mod(particle_number, 2),
+        target_state=0,
+        cache_gradients,
+    )
+end
+
 getParity(GS::GaussianState) = Int(sign(real(pfaffian(2 * GS.Γ)))) == 1 ? 0 : 1
 getParity(Γ::AbstractMatrix) = Int(sign(real(pfaffian(2 * Γ)))) == 1 ? 0 : 1
 
@@ -112,7 +360,13 @@ Updates the variational parameters `η` of the Gaussian state `GS` and recompute
 function write!(GS::GaussianState, η::AbstractVector{<:Number})
     GS.η = η
     GS.Γ, GS.occ_ref = get_Γ_from_H_BdG(GS.H_BdG_func(η, GS.N), GS.parity_sector; target_state=GS.target_state)
-    GS.slater_loggrad_cache = build_slater_loggradient_cache(GS.H_BdG_func, η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state)
+    GS.slater_loggrad_cache = GS.cache_gradients ? build_slater_loggradient_cache(
+        GS.H_BdG_func,
+        η,
+        GS.N;
+        parity_sector=GS.parity_sector,
+        target_state=GS.target_state,
+    ) : SlaterLogGradientCache(Matrix{ComplexF64}[])
     GS.amplitude_cache = build_amplitude_cache(GS.H_BdG_func(η, GS.N), GS.parity_sector, GS.occ_ref)
 end
 
@@ -204,18 +458,29 @@ function build_H_BdG_derivatives(H_BdG_func::Function, η::AbstractVector{<:Numb
     T = eltype(H_BdG_func(η, N))
 
     dHs = Vector{Matrix{T}}(undef, length(η))
-    if T <: AbstractFloat
-        f = θ -> vec(Matrix(H_BdG_func(θ, N)))
-        J = Zygote.jacobian(f, η)[1]  # (2*dimH^2) x length(η)
+    isempty(η) && return dHs
+    if eltype(η) <: Real && T <: Real
+        f_real_output = θ -> vec(Matrix(H_BdG_func(θ, N)))
+        J = Zygote.jacobian(f_real_output, η)[1]
 
         for a in eachindex(η)
-            dH_real = reshape(@view(J[1:n_entries, a]), dimH, dimH)
-            dHs[a] = dH_real
+            dHs[a] = reshape(@view(J[:, a]), dimH, dimH)
         end
-    elseif T <: Complex
+    elseif eltype(η) <: Real
+        function f_real_parameters(θ)
+            H_vec = vec(Matrix(H_BdG_func(θ, N)))
+            return vcat(real.(H_vec), imag.(H_vec))
+        end
+        J = Zygote.jacobian(f_real_parameters, η)[1]
+
+        for a in eachindex(η)
+            dHs[a] = reshape(@view(J[1:n_entries, a]), dimH, dimH) .+
+                      im .* reshape(@view(J[n_entries+1:2n_entries, a]), dimH, dimH)
+        end
+    elseif eltype(η) <: Complex
         η_reim = vcat(real.(η), imag.(η))
 
-        function f_reim(x)
+        function f_complex_parameters(x)
             n = length(x) ÷ 2
             θ = ComplexF64.(x[1:n] .+ im .* x[n+1:end])
 
@@ -224,7 +489,7 @@ function build_H_BdG_derivatives(H_BdG_func::Function, η::AbstractVector{<:Numb
             return vcat(real.(H_vec), imag.(H_vec))
         end
 
-        J = Zygote.jacobian(f_reim, η_reim)[1]
+        J = Zygote.jacobian(f_complex_parameters, η_reim)[1]
 
         nη = length(η)
 
@@ -245,6 +510,8 @@ function build_H_BdG_derivatives(H_BdG_func::Function, η::AbstractVector{<:Numb
 
             dHs[a] = dH
         end
+    else
+        throw(ArgumentError("unsupported parameter element type $(eltype(η))"))
     end
     
     return dHs
