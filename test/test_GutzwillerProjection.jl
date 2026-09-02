@@ -12,7 +12,7 @@ using QuantumNaturalfPEPS
 
     raw_orbitals = randn(rng, ComplexF64, 2N, N)
     occupied_orbitals = Matrix(qr(raw_orbitals).Q[:, 1:N])
-    state = GutzwillerProjectedState(occupied_orbitals)
+    state = FixedGutzwillerProjectedState(occupied_orbitals)
 
     @test state.N == N
     @test state.Nup === nothing
@@ -138,7 +138,7 @@ using QuantumNaturalfPEPS
         peps = PEPS(ComplexF64, hilbert; bond_dim=1, show_warning=false)
         θ = ComplexF64.(1 .+ 0.05randn(rng, length(peps)))
         write!(peps, θ)
-        hamiltonian = hamiltonian_J1J2_triangular(
+        hamiltonian = hamiltonian_J1J2_H(
             L,
             L;
             J1=1.0,
@@ -176,6 +176,21 @@ using QuantumNaturalfPEPS
         @test transverse_batch[:Cperp_displacement][1, 1] == 0.5
         @test all(isfinite, transverse_batch[:Cperp_reference_error])
         @test all(isfinite, transverse_batch[:Cperp_displacement_error])
+
+        chirality_batch = Oks_and_Eks(
+            θ,
+            8;
+            measure_chirality=true,
+            chirality_block_length=4,
+        )
+        @test size(chirality_batch[:chirality_up]) == (L, L)
+        @test size(chirality_batch[:chirality_down]) == (L, L)
+        @test size(chirality_batch[:chirality_up_error]) == (L, L)
+        @test size(chirality_batch[:chirality_down_error]) == (L, L)
+        @test all(isfinite, chirality_batch[:chirality_up])
+        @test all(isfinite, chirality_batch[:chirality_down])
+        @test all(isfinite, chirality_batch[:chirality_up_error])
+        @test all(isfinite, chirality_batch[:chirality_down_error])
 
         adjacent_up_orbitals = Matrix(qr(
             randn(rng, ComplexF64, number_of_sites, number_up + 1),
@@ -235,6 +250,27 @@ using QuantumNaturalfPEPS
             end
             total / number_of_sites
         end
+
+        chirality_up = zeros(ComplexF64, L, L)
+        chirality_down = zeros(ComplexF64, L, L)
+        QuantumNaturalfPEPS._fill_fixed_sz_scalar_chirality!(
+            chirality_up,
+            chirality_down,
+            test_cache,
+            local_weights,
+            (L, L),
+        )
+        sites = (1, 2, L + 2)
+        spins = Tuple(test_configuration[site] for site in sites)
+        inverse_configuration = copy(test_configuration)
+        inverse_configuration[collect(sites)] .= (spins[2], spins[3], spins[1])
+        forward_configuration = copy(test_configuration)
+        forward_configuration[collect(sites)] .= (spins[3], spins[1], spins[2])
+        expected_chirality = im * (
+            combined_amplitude(inverse_configuration) -
+            combined_amplitude(forward_configuration)
+        ) / (4test_amplitude)
+        @test chirality_up[1, 1] ≈ expected_chirality
 
 
         anchor = findfirst(==(1), test_configuration)
@@ -316,11 +352,11 @@ using QuantumNaturalfPEPS
     end
 
     @testset "input validation" begin
-        @test_throws DimensionMismatch GutzwillerProjectedState(zeros(5, 2))
-        @test_throws DimensionMismatch GutzwillerProjectedState(zeros(2N, N - 1))
-        @test_throws DimensionMismatch GutzwillerProjectedState(zeros(N, 1), zeros(N + 1, 3))
-        @test_throws DimensionMismatch GutzwillerProjectedState(zeros(N, 1), zeros(N, 1))
-        @test_throws ArgumentError GutzwillerProjectedState(occupied_orbitals; Nup=N + 1)
+        @test_throws DimensionMismatch FixedGutzwillerProjectedState(zeros(5, 2))
+        @test_throws DimensionMismatch FixedGutzwillerProjectedState(zeros(2N, N - 1))
+        @test_throws DimensionMismatch FixedGutzwillerProjectedState(zeros(N, 1), zeros(N + 1, 3))
+        @test_throws DimensionMismatch FixedGutzwillerProjectedState(zeros(N, 1), zeros(N, 1))
+        @test_throws ArgumentError FixedGutzwillerProjectedState(occupied_orbitals; Nup=N + 1)
         @test_throws DimensionMismatch gutzwiller_amplitude(state, [0, 1])
         @test_throws DomainError gutzwiller_amplitude(state, [0, 1, 2, 0])
     end

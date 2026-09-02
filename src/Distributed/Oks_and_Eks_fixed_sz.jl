@@ -7,6 +7,9 @@ combined `D=1` PPEPS--Gutzwiller probability with opposite-spin Metropolis
 exchanges. For `D=1`, both the PPEPS amplitude ratios and its logarithmic
 derivatives are exact scalar contractions.
 
+When the projected state is trainable, the callback parameter vector and the
+columns of `Oks` are ordered as `vcat(vec(peps), Parameters(trial_state))`.
+
 This backend is selected through
 `generate_Oks_and_Eks(...; fixed_sz_metropolis=true)`. It intentionally only
 supports `bond_dim == 1`; nontrivial PPEPS bond dimensions must use the usual
@@ -15,7 +18,7 @@ PEPS contraction and sampling backend.
 function generate_Oks_and_Eks_fixed_sz(
     peps::AbstractPEPS,
     ham_op::TensorOperatorSum;
-    trial_state::GutzwillerProjectedState,
+    trial_state::AbstractGutzwillerProjectedState,
     burnin_sweeps::Integer=10,
     moves_per_sample::Union{Nothing,Integer}=nothing,
     rebuild_after::Integer=64,
@@ -36,11 +39,19 @@ function generate_Oks_and_Eks_fixed_sz(
 
     evaluation = Ref(0)
     function Oks_and_Eks_(θ::Vector{T}, sample_nr::Integer; kwargs2...) where {T}
-        length(θ) == length(peps) || throw(DimensionMismatch(
-            "the fixed-Sz D=1 backend expects $(length(peps)) PPEPS parameters, " *
+        number_of_peps_parameters = length(peps)
+        number_of_trial_parameters = length(Parameters(trial_state))
+        expected_parameters = number_of_peps_parameters + number_of_trial_parameters
+        length(θ) == expected_parameters || throw(DimensionMismatch(
+            "the fixed-Sz D=1 backend expects $expected_parameters parameters, " *
+            "consisting of $number_of_peps_parameters PPEPS and " *
+            "$number_of_trial_parameters trial-state parameters; " *
             "got $(length(θ))",
         ))
-        write!(peps, θ; reset_double_layer=false)
+        write!(peps, θ[1:number_of_peps_parameters]; reset_double_layer=false)
+        if number_of_trial_parameters > 0
+            write!(trial_state, θ[number_of_peps_parameters+1:end])
+        end
         evaluation[] += 1
         evaluation_seed = isnothing(seed) ? nothing : seed + evaluation[] - 1
         return Oks_and_Eks_fixed_sz(
@@ -63,7 +74,8 @@ function generate_Oks_and_Eks_fixed_sz(
         parameters.obj === peps || throw(ArgumentError(
             "the Parameters object must wrap the PPEPS used to construct this callback",
         ))
-        return Oks_and_Eks_(vec(peps), sample_nr; kwargs2...)
+        θ = vcat(vec(peps), Parameters(trial_state))
+        return Oks_and_Eks_(θ, sample_nr; kwargs2...)
     end
     return Oks_and_Eks_
 end
@@ -173,7 +185,7 @@ function _check_fixed_sz_d1_inputs(peps, ham_op, trial_state)
         "fixed_sz_metropolis currently requires every PPEPS tensor to be trainable",
     ))
     isnothing(trial_state.Nup) && throw(ArgumentError(
-        "fixed_sz_metropolis requires GutzwillerProjectedState(...; Nup=...)",
+        "fixed_sz_metropolis requires a projected state with a fixed Nup",
     ))
     size(peps) == size(ham_op) || throw(DimensionMismatch(
         "PPEPS size $(size(peps)) does not match Hamiltonian size $(size(ham_op))",
@@ -196,7 +208,7 @@ end
 
 function _random_gutzwiller_exchange_cache(
     rng,
-    state::GutzwillerProjectedState;
+    state::AbstractGutzwillerProjectedState;
     maximum_attempts::Integer,
 )
     Nup = something(state.Nup)
@@ -421,6 +433,64 @@ function _fill_fixed_sz_monopole_matrix_element!(
     return estimator
 end
 
+function _fixed_sz_permutation_ratio(cache, weights, sites, target_spins)
+    configuration = cache.configuration
+    changed_sites = Int[]
+    for (site, target_spin) in zip(sites, target_spins)
+        configuration[site] == target_spin || push!(changed_sites, site)
+    end
+    isempty(changed_sites) && return 1.0 + 0.0im
+    length(changed_sites) == 2 || error(
+        "a spin permutation must leave zero or two sites changed",
+    )
+    first_site, second_site = changed_sites
+    return gutzwiller_exchange_ratio(cache, first_site, second_site) *
+           _d1_exchange_ratio(weights, configuration, first_site, second_site)
+end
+
+function _fixed_sz_scalar_chirality(cache, weights, i::Int, j::Int, k::Int)
+    configuration = cache.configuration
+    spins = (configuration[i], configuration[j], configuration[k])
+
+    # For chi_ijk = S_i dot (S_j x S_k),
+    # chi = (i/4) (P_ij P_jk - P_jk P_ij).  In a VMC local estimator the
+    # permutations act on the wavefunction to the right, hence the two target
+    # configurations below appear in inverse order.
+    inverse_cycle = (spins[2], spins[3], spins[1])
+    forward_cycle = (spins[3], spins[1], spins[2])
+    sites = (i, j, k)
+    inverse_ratio = _fixed_sz_permutation_ratio(
+        cache,
+        weights,
+        sites,
+        inverse_cycle,
+    )
+    forward_ratio = _fixed_sz_permutation_ratio(
+        cache,
+        weights,
+        sites,
+        forward_cycle,
+    )
+    return im * (inverse_ratio - forward_ratio) / 4
+end
+
+function _fill_fixed_sz_scalar_chirality!(up, down, cache, weights, lattice_size)
+    Lx, Ly = lattice_size
+    linear_site(x, y) = mod(x, Lx) + 1 + mod(y, Ly) * Lx
+    for y in 0:Ly-1, x in 0:Lx-1
+        r = linear_site(x, y)
+        rx = linear_site(x + 1, y)
+        ry = linear_site(x, y + 1)
+        rxy = linear_site(x + 1, y + 1)
+
+        # Both vertex lists are counterclockwise for primitive vectors
+        # a1=(1,0), a2=(-1/2,sqrt(3)/2).
+        up[x + 1, y + 1] = _fixed_sz_scalar_chirality(cache, weights, r, rx, rxy)
+        down[x + 1, y + 1] = _fixed_sz_scalar_chirality(cache, weights, r, rxy, ry)
+    end
+    return nothing
+end
+
 function _fixed_sz_block_error(samples, block_length::Integer)
     number_of_samples = size(samples, 1)
     number_of_blocks = fld(number_of_samples, block_length)
@@ -445,7 +515,7 @@ function Oks_and_Eks_fixed_sz(
     peps::AbstractPEPS,
     ham_op::TensorOperatorSum,
     sample_nr::Integer;
-    trial_state::GutzwillerProjectedState,
+    trial_state::AbstractGutzwillerProjectedState,
     burnin_sweeps::Integer=10,
     moves_per_sample::Union{Nothing,Integer}=nothing,
     rebuild_after::Integer=64,
@@ -455,7 +525,9 @@ function Oks_and_Eks_fixed_sz(
     measure_transverse::Bool=false,
     transverse_reference::Integer=1,
     transverse_block_length::Integer=20,
-    monopole_state::Union{Nothing,GutzwillerProjectedState}=nothing,
+    monopole_state::Union{Nothing,AbstractGutzwillerProjectedState}=nothing,
+    measure_chirality::Bool=false,
+    chirality_block_length::Integer=20,
     kwargs...,
 )
     sample_nr > 1 || throw(ArgumentError("sample_nr must be at least 2"))
@@ -466,6 +538,9 @@ function Oks_and_Eks_fixed_sz(
     ))
     transverse_block_length > 0 || throw(ArgumentError(
         "transverse_block_length must be positive",
+    ))
+    chirality_block_length > 0 || throw(ArgumentError(
+        "chirality_block_length must be positive",
     ))
     moves = isnothing(moves_per_sample) ? N : moves_per_sample
     moves > 0 || throw(ArgumentError("moves_per_sample must be positive"))
@@ -501,7 +576,13 @@ function Oks_and_Eks_fixed_sz(
         attempted += 1
     end
 
-    Oks = zeros(ComplexF64, sample_nr, length(peps))
+    number_of_peps_parameters = length(peps)
+    number_of_trial_parameters = length(Parameters(trial_state))
+    Oks = zeros(
+        ComplexF64,
+        sample_nr,
+        number_of_peps_parameters + number_of_trial_parameters,
+    )
     Eks = Vector{ComplexF64}(undef, sample_nr)
     logψs = Vector{ComplexF64}(undef, sample_nr)
     samples = Vector{Matrix{Int}}(undef, sample_nr)
@@ -510,6 +591,10 @@ function Oks_and_Eks_fixed_sz(
         zeros(ComplexF64, sample_nr, size(peps)...) : nothing
     monopole_samples = isnothing(monopole_state) ? nothing :
         zeros(ComplexF64, sample_nr, N)
+    chirality_up_samples = measure_chirality ?
+        zeros(ComplexF64, sample_nr, size(peps)...) : nothing
+    chirality_down_samples = measure_chirality ?
+        zeros(ComplexF64, sample_nr, size(peps)...) : nothing
     for sample_index in 1:sample_nr
         for _ in 1:moves
             accepted += _fixed_sz_metropolis_move!(
@@ -525,10 +610,14 @@ function Oks_and_Eks_fixed_sz(
             attempted += 1
         end
         _fill_fixed_sz_d1_Ok!(
-            view(Oks, sample_index, :),
+            view(Oks, sample_index, 1:number_of_peps_parameters),
             weights,
             cache.configuration,
         )
+        if number_of_trial_parameters > 0
+            view(Oks, sample_index, number_of_peps_parameters+1:size(Oks, 2)) .=
+                gutzwiller_log_gradient(trial_state, cache)
+        end
         Eks[sample_index] = _fixed_sz_local_energy(cache, weights, compiled_hamiltonian)
         logψs[sample_index] = _fixed_sz_log_amplitude(cache, weights)
         samples[sample_index] = reshape(copy(cache.configuration), size(peps))
@@ -549,6 +638,15 @@ function Oks_and_Eks_fixed_sz(
                 adjacent_cache,
                 adjacent_anchor[],
                 weights,
+            )
+        end
+        if measure_chirality
+            _fill_fixed_sz_scalar_chirality!(
+                view(chirality_up_samples, sample_index, :, :),
+                view(chirality_down_samples, sample_index, :, :),
+                cache,
+                weights,
+                size(peps),
             )
         end
     end
@@ -579,6 +677,26 @@ function Oks_and_Eks_fixed_sz(
         real_error = _fixed_sz_block_error(monopole_samples, transverse_block_length)
         imaginary_error = _fixed_sz_block_error(im .* monopole_samples, transverse_block_length)
         result[:monopole_matrix_element_error] = hypot.(real_error, imaginary_error)
+    end
+    if measure_chirality
+        result[:chirality_up] = dropdims(mean(chirality_up_samples; dims=1); dims=1)
+        result[:chirality_down] = dropdims(mean(chirality_down_samples; dims=1); dims=1)
+        result[:chirality_up_error] = _fixed_sz_block_error(
+            chirality_up_samples,
+            chirality_block_length,
+        )
+        result[:chirality_down_error] = _fixed_sz_block_error(
+            chirality_down_samples,
+            chirality_block_length,
+        )
+        result[:chirality_up_imaginary_mean] = dropdims(
+            mean(imag.(chirality_up_samples); dims=1);
+            dims=1,
+        )
+        result[:chirality_down_imaginary_mean] = dropdims(
+            mean(imag.(chirality_down_samples); dims=1);
+            dims=1,
+        )
     end
     return result
 end

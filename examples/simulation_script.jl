@@ -33,29 +33,22 @@ physical_hamiltonians = hamiltonian_J1J2_H(
 
 ### mean-field ansätze
 # monopole ansatz - no free parameters => no optimization
-hopping, flux = uniform_flux_staggered_pi_hoppings(Lx, Ly, 0)
 # Haux = Matrix(hamiltonian_aux_triangular_torus(Lx, Ly; hopping))
 # spectrum = eigen(Hermitian(Haux[1:2:end, 1:2:end])) # diagonalization in 1 spin sector
 # Nspin = N ÷ 2
 # gap = spectrum.values[Nspin + 1] - spectrum.values[Nspin]
 # Vspin = spectrum.vectors[:, 1:Nspin]
 
-fields = zeros(Float64, Lx, Ly, 3)
-monopole_Haux = hamiltonian_aux_triangular_torus(Lx, Ly; hopping, fields)
 monopole_gs = monopole_state(
-    monopole_Haux;
+    Lx,
+    Ly,
+    0;
     particle_number=N,
 )
 monopole_projected_state = gutzwiller_project(monopole_gs)
 
-
-# The values below are nonzero initial guesses for optimization, not optimized
-# values quoted by the paper. Each comment gives the exact reduced parameter
-# ordering exposed by the corresponding Gaussian state.
-
 # Y state: η_Y = [h1, h2, h3, Δ]
 η_Y = [0.35, 0.25, 0.15, 0.8]
-Y_hopping, Y_fields = triangular_y_hopping_fields(Lx, Ly, η_Y)
 Y_gs = y_state(
     Lx,
     Ly;
@@ -69,12 +62,6 @@ Y_projected_state = gutzwiller_project(Y_gs)
 # Delta/t in Fig. 2(b) is retained as the fixed stripe_delta input.
 η_CS = [0.3]
 stripe_delta = 0.8
-CS_hopping, CS_fields = cs_hopping_fields(
-    Lx,
-    Ly,
-    η_CS;
-    stripe_delta,
-)
 CS_gs = cs_state(
     Lx,
     Ly;
@@ -101,19 +88,10 @@ umbrella_gs = umbrella_state(
 umbrella_projected_state = gutzwiller_project(umbrella_gs)
 
 
-projected_states = (;
-    monopole=monopole_projected_state,
-    Y=Y_projected_state,
-    canted_stripe=CS_projected_state,
-    umbrella=umbrella_projected_state,
-)
-
 # Select which ansatz to optimize. Y, canted-stripe, and umbrella contain
 # transverse fields and therefore need not have a fixed total Sz. The monopole
 # state is spin-conserving and remains in a fixed sector intrinsically.
-trial_state_name = :Y
-projected_state = getproperty(projected_states, trial_state_name)
-
+projected_state = Y_projected_state
 Oks_and_Eks = QuantumNaturalfPEPS.generate_Oks_and_Eks(
     peps,
     physical_hamiltonians;

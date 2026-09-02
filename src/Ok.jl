@@ -77,7 +77,7 @@ function get_Ok(trial_state::IdentityState, S::Matrix{Int64}, Ok)
 end
 
 function get_Ok(
-    trial_state::GutzwillerProjectedState,
+    trial_state::FixedGutzwillerProjectedState,
     ::Matrix{Int64},
     Ok,
 )

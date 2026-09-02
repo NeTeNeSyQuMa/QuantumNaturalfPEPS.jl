@@ -34,7 +34,7 @@ include("Ek.jl")
 include("Ok_and_Ek.jl")
 include("Observables.jl")
 include("Hamiltonians.jl")
-include("TrialStates/PartonMeanField.jl")
+include("TrialStates/PartonMeanFieldStates.jl")
 
 include("Operations/Operations.jl")
 include("Properties/Properties.jl")
@@ -52,12 +52,12 @@ export uniform_flux_staggered_pi_hoppings
 export hamiltonian_aux_triangular_torus
 export hamiltonian_J1J2_H
 export monopole_state, triangular_aux_gaussian_state
-export triangular_y_hopping_fields, umbrella_hopping_fields
+export y_hopping_fields, umbrella_hopping_fields
 export cs_hopping_fields
 export y_state, umbrella_state
 export cs_state
-export AbstractGutzwillerProjectedState, GutzwillerProjectedState
-export GutzwillerProjectedGaussianState, gutzwiller_project
+export AbstractGutzwillerProjectedState, FixedGutzwillerProjectedState
+export ParameterizedGutzwillerProjectedState, gutzwiller_project
 export gutzwiller_amplitude, gutzwiller_weight, gutzwiller_log_gradient
 export GutzwillerExchangeCache, gutzwiller_exchange_ratio
 export accept_gutzwiller_exchange!

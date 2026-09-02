@@ -193,7 +193,7 @@ using QuantumNaturalfPEPS
 
     @testset "physical triangular J1-J2 Hamiltonian" begin
         physical_N = 4 * 4
-        physical_hamiltonian = hamiltonian_J1J2_triangular(
+        physical_hamiltonian = hamiltonian_J1J2_H(
             4,
             4;
             J1=1.0,
@@ -217,7 +217,7 @@ using QuantumNaturalfPEPS
         @test ITensors.Ops.coefficient(last_field) == -0.3
         @test only(last_field_ops) == ITensors.Ops.Op("Sz", (4, 4))
 
-        periodic_hamiltonian = hamiltonian_J1J2_triangular(
+        periodic_hamiltonian = hamiltonian_J1J2_H(
             4,
             4;
             J1=1.0,
@@ -228,10 +228,10 @@ using QuantumNaturalfPEPS
         @test length(periodic_hamiltonian) ==
               3 * (3physical_N + 3physical_N) + physical_N
 
-        @test length(hamiltonian_J1J2_triangular(4, 4; J1=1, J2=0, H=0)) == 3 * 33
-        @test length(hamiltonian_J1J2_triangular(4, 4; J1=0, J2=0, H=1)) == physical_N
-        @test isempty(hamiltonian_J1J2_triangular(4, 4; J1=0, J2=0, H=0))
-        @test_throws ArgumentError hamiltonian_J1J2_triangular(
+        @test length(hamiltonian_J1J2_H(4, 4; J1=1, J2=0, H=0)) == 3 * 33
+        @test length(hamiltonian_J1J2_H(4, 4; J1=0, J2=0, H=1)) == physical_N
+        @test isempty(hamiltonian_J1J2_H(4, 4; J1=0, J2=0, H=0))
+        @test_throws ArgumentError hamiltonian_J1J2_H(
             4,
             4;
             J1=1,
@@ -239,7 +239,7 @@ using QuantumNaturalfPEPS
             H=0,
             boundary=:cylindrical,
         )
-        @test_throws ArgumentError hamiltonian_J1J2_triangular(
+        @test_throws ArgumentError hamiltonian_J1J2_H(
             4,
             4;
             J1=1,
