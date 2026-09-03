@@ -95,7 +95,7 @@ function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; trial_state
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        weights = logpcs
+        weights = ones(length(logpcs))
     end
     @everywhere GC.gc() # Force garbage collection of the shared arrays on the remote workers.
     return Dict(:Oks => transpose(Oks), :Eks => Eks, :logψs => logψs,
@@ -183,7 +183,7 @@ function Oks_and_Eks_multiproc_sharedarrays(GS::GaussianState, H_BdG_exact::Herm
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        weights = logpcs
+        weights = ones(length(logpcs))
     end
     @everywhere GC.gc() # Force garbage collection of the shared arrays on the remote workers.
     return Dict(:Oks => transpose(Oks), :Eks => Eks, :logψs => logψs,
