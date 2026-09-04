@@ -43,7 +43,7 @@ function generate_Eks_singlethread(peps::AbstractPEPS, ham_op::TensorOperatorSum
         end
         # Update the double-layer environment once per call
         @timeit timer "double_layer_envs" update_double_layer_envs!(peps)
-        
+
         return Eks_singlethread(peps, ham_op, sample_nr; timer=timer, trial_state=trial_state, kwargs...)
     end
     return Eks_
@@ -92,7 +92,7 @@ function generate_Eks_threaded(peps::AbstractPEPS, ham_op::TensorOperatorSum; ti
         if !no_write
             write!(peps, Θ; reset_double_layer)
         end
-        
+
         if reset_double_layer
             @timeit timer "double_layer_envs" update_double_layer_envs!(peps)
         end
@@ -103,14 +103,14 @@ end
 
 function Eks_threaded(peps, ham_op, sample_nr; importance_weights=true, seed=nothing,
                       timer=TimerOutput(), nr_threads=Threads.nthreads(), trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), kwargs...)
-    
+
     if seed !== nothing
         Random.seed!(seed)
     end
 
     nr_parameters = length(peps)
     k = ceil(Int, sample_nr / nr_threads)
-    
+
     eltype_ = eltype(peps)
     eltype_real = real(eltype_)
 

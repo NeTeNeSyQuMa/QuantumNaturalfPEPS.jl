@@ -97,7 +97,7 @@ function generate_env_row(peps_projected, contract_dim; env_row_above=nothing, a
     return Environment(peps_projected, norm_shift; normalize=true)
 end
 
-function get_logψ(env_top::Vector{Environment}, env_down::Vector{Environment}; pos=length(env_top)÷2)
+function get_logψ(env_top::Vector{Environment}, env_down::Vector{Environment}; pos=max(length(env_top)÷2, 1)) # max: on a two-row lattice length(env_top)÷2 would be 0
     #ψS = contract(env_top[pos].env.*env_down[end-pos+1].env)[1]
     #logψS = log(Complex(ψS))
     logψS = _log_or_not_dot(env_top[pos].env, env_down[end-pos+1].env, true; dag=false)
@@ -175,7 +175,11 @@ function get_4b_envs!(peps::AbstractPEPS, env_top::Vector{Environment}, env_down
     peps_i = get_projected(peps, S, i, :)  
     peps_j = get_projected(peps, S, i+1, :)
 
-    if i == 1
+    if size(peps, 1) == 2
+        # two-row lattice: the row pair covers the whole lattice, no environment above or below
+        contract_recursiv!(fourb_envs_r, peps_i, peps_j)
+        contract_recursiv!(fourb_envs_l, peps_i, peps_j, right_to_left=false)
+    elseif i == 1
         contract_recursiv!(fourb_envs_r, peps_i, peps_j, c=env_down[end-1].env)
         contract_recursiv!(fourb_envs_l, peps_i, peps_j, c=env_down[end-1].env, right_to_left=false)
     elseif i == size(peps, 1)-1

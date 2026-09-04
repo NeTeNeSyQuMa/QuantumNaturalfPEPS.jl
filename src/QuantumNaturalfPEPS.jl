@@ -18,7 +18,6 @@ using QuantumNaturalGradient
 
 using MatrixFactorizations
 using SkewLinearAlgebra
-using Zygote
 
 include("TrialStates/TrialStates.jl")
 
