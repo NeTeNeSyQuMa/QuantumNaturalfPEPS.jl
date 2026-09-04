@@ -69,7 +69,7 @@ function Oks_and_Eks_multiproc(peps, ham_op, sample_nr; trial_state = IdentitySt
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        weights = logpcs
+        weights = ones(length(logpcs))
     end
 
     return Dict(:Oks => transpose(Oks), :Eks => Eks, :logψs => logψs, :samples => samples, :weights => weights, :contract_dims => contract_dims)
@@ -136,7 +136,7 @@ function Oks_and_Eks_multiproc(GS::GaussianState, H_BdG_exact::Hermitian, sample
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        weights = logpcs
+        weights = ones(length(logpcs))
     end
 
     return Dict(:Oks => transpose(Oks), :Eks => Eks, :logψs => logψs, :samples => samples, :weights => weights, :contract_dims => contract_dims)
