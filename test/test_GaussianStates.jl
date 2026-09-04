@@ -464,11 +464,9 @@ using QuantumNaturalfPEPS
         end
 
         @testset "truncation of null Vbar columns at the noise floor" begin
-            # Regression: for a *near*-Slater trial state — an optimized η whose pairing
-            # components have decayed to ~1e-9 but not to zero — half the columns of Vbar
-            # carry only leaked pairing at ~1e-10, exactly where an *absolute* 1e-10 cutoff
-            # stops recognising them as zero. (An exactly pairing-free η, e.g. a pure π-flux
-            # hopping state, gives clean 0.0 columns and never triggers this.) A null
+            # Regression: for a Slater determinant (no pairing, e.g. a π-flux hopping state)
+            # half the columns of Vbar vanish and their numerical noise floor sits at ~1e-10 —
+            # exactly where an *absolute* 1e-10 cutoff stops recognising them as zero. A null
             # column then survives, Q_mat comes out one dimension too large, and pfaffian()
             # returns 0 for *every* configuration: logψ = -Inf everywhere, so the importance
             # weights come out NaN and the optimisation dies with
