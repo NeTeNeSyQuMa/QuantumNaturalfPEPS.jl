@@ -40,7 +40,7 @@ function Oks_and_Eks_multiproc(peps, ham_op, sample_nr; Oks=nothing, importance_
 
     seed = rand(UInt)
     # TODO: Send ham_op only once through the network
-    out = [Distributed.remotecall(() -> Oks_and_Eks_threaded(peps, ham_op, k; importance_weights=false, seed=seed + w, kwargs...), w) for w in workers()]
+    out = [Distributed.remotecall(() -> Oks_and_Eks_threaded(peps, ham_op, k; importance_weights=importance_weights, seed=seed + w, kwargs...), w) for w in workers()]
     
     eltype_ = eltype(peps)
     eltype_real = real(eltype_)
@@ -60,14 +60,14 @@ function Oks_and_Eks_multiproc(peps, ham_op, sample_nr; Oks=nothing, importance_
         i2 = k_eff * i
         
         out_dict = fetch(out_i)
-        Eks[i1:i2], logψs[i1:i2], samples[i1:i2], logpcs[i1:i2], contract_dims[i1:i2] = out_dict[:Eks], out_dict[:logψs], out_dict[:samples], out_dict[:weights], out_dict[:contract_dims]
+        Eks[i1:i2], logψs[i1:i2], samples[i1:i2], logpcs[i1:i2], contract_dims[i1:i2] = out_dict[:Eks], out_dict[:logψs], out_dict[:samples], out_dict[:logpcs], out_dict[:contract_dims]
         @timeit timer "copy Oks" Oks[:, i1:i2] .= transpose(out_dict[:Oks])
     end
     
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        weights = logpcs
+        weights = ones(length(logpcs))
     end
     
     return Dict(:Oks => transpose(Oks), :Eks => Eks, :logψs => logψs, :samples => samples, :weights => weights, :contract_dims => contract_dims)
