@@ -64,7 +64,7 @@ function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; Oks=nothing
         Oks_ = @view Oks[:, i1:i2]
         task = Distributed.remotecall(
             () -> Oks_and_Eks_threaded(peps, ham_op, k;
-                                        importance_weights=false, seed=seed + w,
+                                        importance_weights=false, logpcs_instead_of_weights=true, seed=seed + w,
                                         nr_threads=n_threads, Oks=Oks_, return_Oks=false, kwargs...),
             w)
         push!(out, task)
@@ -93,7 +93,7 @@ function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; Oks=nothing
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        weights = logpcs
+        weights = ones(length(logpcs))
     end
     @everywhere GC.gc() # Force garbage collection of the shared arrays on the remote workers.
     return Dict(:Oks => transpose(Oks), :Eks => Eks, :logψs => logψs,

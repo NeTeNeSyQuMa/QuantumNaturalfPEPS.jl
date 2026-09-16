@@ -26,7 +26,7 @@ function generate_Oks_and_Eks_multiproc(peps::AbstractPEPS, ham_op::TensorOperat
     return Oks_and_Eks_
 end
 
-function Oks_and_Eks_multiproc(peps, ham_op, sample_nr; Oks=nothing, importance_weights=true, 
+function Oks_and_Eks_multiproc(peps, ham_op, sample_nr; Oks=nothing, importance_weights=true, logpcs_instead_of_weights=false,
                                n_threads=Distributed.remotecall_fetch(()->Threads.nthreads(), workers()[1]),
                                timer=TimerOutput(),
                                kwargs...)
@@ -40,7 +40,7 @@ function Oks_and_Eks_multiproc(peps, ham_op, sample_nr; Oks=nothing, importance_
 
     seed = rand(UInt)
     # TODO: Send ham_op only once through the network
-    out = [Distributed.remotecall(() -> Oks_and_Eks_threaded(peps, ham_op, k; importance_weights=false, seed=seed + w, kwargs...), w) for w in workers()]
+    out = [Distributed.remotecall(() -> Oks_and_Eks_threaded(peps, ham_op, k; importance_weights=false, logpcs_instead_of_weights=true, seed=seed + w, kwargs...), w) for w in workers()]
     
     eltype_ = eltype(peps)
     eltype_real = real(eltype_)
@@ -67,7 +67,11 @@ function Oks_and_Eks_multiproc(peps, ham_op, sample_nr; Oks=nothing, importance_
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        weights = logpcs
+        if logpcs_instead_of_weights
+            weights = logpcs
+        else
+            weights = ones(length(logpcs))
+        end
     end
     
     return Dict(:Oks => transpose(Oks), :Eks => Eks, :logψs => logψs, :samples => samples, :weights => weights, :contract_dims => contract_dims)
