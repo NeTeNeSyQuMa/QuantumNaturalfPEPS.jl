@@ -3,13 +3,16 @@ _resolve_flag(flag::Bool) = flag
 _resolve_flag(flag::Base.RefValue{Bool}) = flag[]
 
 function Ok_and_Ek(peps::AbstractPEPS, ham_op; trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])), 
-                   timer=TimerOutput(), Ok=nothing, sampling_mode=:full,
+                   timer=TimerOutput(), Ok=nothing, sampling_mode=:full, lookahead_depth=0,
                    slow_energy=false, slow_energy_pos=max(1, (size(peps, 1)-1) ÷ 2),
                    resample=false, correct_sampling_error=true, resample_energy=0, # TODO: remove
                    )
     slow_energy = _resolve_flag(slow_energy)
+    lookahead_depth == 0 || correct_sampling_error || throw(ArgumentError(
+        "lookahead sampling requires correct_sampling_error=true",
+    ))
     
-    S, logpc, env_top = @timeit timer "sampling" get_sample(peps; trial_state=trial_state, mode=sampling_mode, timer) # draw a sample
+    S, logpc, env_top = @timeit timer "sampling" get_sample(peps; trial_state=trial_state, mode=sampling_mode, timer, lookahead_depth) # draw a sample
     
     if resample
         S = QuantumNaturalGradient.resample_with_H(S, ham_op; resample_energy)
@@ -72,11 +75,11 @@ Calculates the Energy of a given a peps and hamiltonian
 """
 function Ek(peps, ham_op; timer=TimerOutput(),
             trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
-            sampling_mode=:full,
+            sampling_mode=:full, lookahead_depth=0,
             slow_energy=false, slow_energy_pos=max(1, (size(peps, 1)-1) ÷ 2))
     slow_energy = _resolve_flag(slow_energy)
 
-    S, logpc, env_top = @timeit timer "sampling" get_sample(peps; trial_state=trial_state, mode=sampling_mode, timer) # draw a sample
+    S, logpc, env_top = @timeit timer "sampling" get_sample(peps; trial_state=trial_state, mode=sampling_mode, timer, lookahead_depth) # draw a sample
 
     # If sampling_mode is full, we do not need to overwrite the the top environments as they are already computed accurately
     overwrite = !(sampling_mode == :full)

@@ -14,11 +14,11 @@ end
 function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum;
                               trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1])),
                               threaded=false, multiproc=false, shared_array=true, async_double_layers=false, verbose=false,
-                              fix_trial_state=false, fix_peps=false,
-                              kwargs...)
-    if fix_peps && fix_trial_state
-        error("fix_peps=true and fix_trial_state=true leaves nothing to optimize")
-    end
+                              fix_trial_state=false, fix_peps=false, lookahead_depth=0, kwargs...)
+    _validate_direct_lookahead(trial_state, lookahead_depth)
+    fix_peps && fix_trial_state && throw(ArgumentError(
+        "fix_peps=true and fix_trial_state=true leaves nothing to optimize",
+    ))
 
     if fix_trial_state
         # freeze the trial state: Θ then only contains the PEPS parameters and only those are updated
@@ -44,14 +44,14 @@ function generate_Oks_and_Eks(peps::AbstractPEPS, ham_op::TensorOperatorSum;
     
     if multiproc
         if shared_array
-            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc_sharedarrays(peps, ham_op; threaded, double_layer_update, trial_state=trial_state, kwargs...)
+            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc_sharedarrays(peps, ham_op; trial_state=trial_state, threaded, double_layer_update, lookahead_depth, kwargs...)
         else
-            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc(peps, ham_op; threaded, double_layer_update, trial_state=trial_state, kwargs...)
+            Oks_and_Eks_func = generate_Oks_and_Eks_multiproc(peps, ham_op; trial_state=trial_state, threaded, double_layer_update, lookahead_depth, kwargs...)
         end
     elseif threaded
-        Oks_and_Eks_func = generate_Oks_and_Eks_threaded(peps, ham_op; double_layer_update, trial_state=trial_state, kwargs...)
+        Oks_and_Eks_func = generate_Oks_and_Eks_threaded(peps, ham_op; trial_state=trial_state, double_layer_update, lookahead_depth, kwargs...)
     else
-        Oks_and_Eks_func = generate_Oks_and_Eks_singlethread(peps, ham_op; double_layer_update, trial_state=trial_state, kwargs...)
+        Oks_and_Eks_func = generate_Oks_and_Eks_singlethread(peps, ham_op; trial_state=trial_state, double_layer_update, lookahead_depth, kwargs...)
     end
 
     if async_double_layers

@@ -1,7 +1,7 @@
 """
     GaussianAmplitudeCache
 
-A struct to cache intermediate results for efficient amplitude calculations in Gaussian states. 
+A struct to cache intermediate results for efficient amplitude calculations in Gaussian states.
 
 # Fields
 - `R_mat_full::Matrix{ComplexF64}`: The full R matrix used in the amplitude calculation, with dimensions M_A x N where M_A is the number of occupied sites in the reference state.
@@ -33,7 +33,7 @@ end
 """
     SlaterConnection
 
-A struct to store the connection information for the nonzero matrix elements of a quadratic Hamiltonian in the occupation number basis. 
+A struct to store the connection information for the nonzero matrix elements of a quadratic Hamiltonian in the occupation number basis.
 
 # Fields
 - `a::Int`: the first index of the connected pair
@@ -51,7 +51,7 @@ end
 """
     OccupationProjectorCache
 
-A struct to cache the occupation projector matrix M for a given occupation configuration. 
+A struct to cache the occupation projector matrix M for a given occupation configuration.
 This is used to save allocations
 """
 mutable struct OccupationProjectorCache
@@ -62,7 +62,7 @@ OccupationProjectorCache(N::Integer) = OccupationProjectorCache(zeros(Float64, 2
 """
     GaussianState
 
-A struct representing a fermionic Gaussian state, defined by its covariance matrix Γ in the Majorana basis and the corresponding Bogoliubov-de Gennes Hamiltonian H_BdG in the Dirac basis (qp-ordered). 
+A struct representing a fermionic Gaussian state, defined by its covariance matrix Γ in the Majorana basis and the corresponding Bogoliubov-de Gennes Hamiltonian H_BdG in the Dirac basis (qp-ordered).
 The struct also includes the variational parameters η used to construct H_BdG.
 
 # Fields
@@ -71,7 +71,7 @@ The struct also includes the variational parameters η used to construct H_BdG.
 - `η::AbstractVector{<:Number}`: The vector of variational parameters used to construct H_BdG, which can be optimized during the training process.
 - `N::Int`: The number of sites.
 - `parity_sector::Int`: The parity sector of the state, which can be either 0 (even) or 1 (odd).
-- `occ_ref::Vector{Int}`: The quasiparticle occupation reference, which is important for selecting the correct Bogoliubov vacuum in the Bloch-Messiah decomposition. 
+- `occ_ref::Vector{Int}`: The quasiparticle occupation reference, which is important for selecting the correct Bogoliubov vacuum in the Bloch-Messiah decomposition.
                         It is constructed from the combination of the `parity_sector` and the `target_state`.
 - `slater_loggrad_cache::SlaterLogGradientCache`: A cache for efficient gradient calculations in Slater determinant states, which stores the A matrix and its derivatives with respect to the variational parameters.
 
@@ -83,24 +83,164 @@ mutable struct GaussianState <: AbstractTrialState
     N::Int # number of sites
     parity_sector::Int # parity sector of the state: either 0 (even) or 1 (odd)
     target_state::Int # ground state (0), first excited state (1) and so on up to the Nth mode
+    target_Sz::Union{Nothing,Real} # total magnetization sector, or nothing for unconstrained filling
+    n_flavours::Int # interleaved parton flavours per physical site
     occ_ref::Vector{Int} # quasiparticle occupation reference. Important for selecting the correct Bogoliubov vacuum in Bloch-Messiah decomposition.
+    cache_gradients::Bool # whether dense covariance derivatives are cached for variational optimization
     slater_loggrad_cache::SlaterLogGradientCache # Cache for efficient gradient calculations in Slater determinant states
     amplitude_cache::GaussianAmplitudeCache # Cache for efficient amplitude calculations
 
-    function GaussianState(H_BdG_func::Function, N::Int; η=Float64[], parity_sector::Int=0, target_state::Int=0)
-        @assert parity_sector == 0 || parity_sector == 1 "Parity must be either 0 (even) or 1 (odd)"
-        Γ, occ_ref = get_Γ_from_H_BdG(H_BdG_func(η, N), parity_sector; target_state=target_state)
-        slater_loggrad_cache = build_slater_loggradient_cache(H_BdG_func, η, N; parity_sector=parity_sector, target_state=target_state)
-        amplitude_cache = build_amplitude_cache(H_BdG_func(η, N), parity_sector, occ_ref)
-        new(Γ, H_BdG_func, η, N, parity_sector, target_state, occ_ref, slater_loggrad_cache, amplitude_cache)
+    function GaussianState(
+        H_BdG_func::Function,
+        N::Int;
+        η=Float64[],
+        parity_sector::Int=0,
+        target_state::Int=0,
+        target_Sz::Union{Nothing,Real}=nothing,
+        n_flavours::Int=1,
+        cache_gradients::Bool=true,
+    )
+        parity_sector in (0, 1) || throw(ArgumentError(
+            "parity_sector must be 0 (even) or 1 (odd), got $parity_sector",
+        ))
+        n_flavours >= 1 || throw(ArgumentError(
+            "n_flavours must be positive, got $n_flavours",
+        ))
+        N % n_flavours == 0 || throw(ArgumentError(
+            "N=$N modes is not divisible by n_flavours=$n_flavours",
+        ))
+        H_BdG = H_BdG_func(η, N)
+        Γ, occ_ref = get_Γ_from_H_BdG(
+            H_BdG,
+            parity_sector;
+            target_state,
+            target_Sz,
+            n_flavours,
+        )
+        slater_loggrad_cache = cache_gradients ? build_slater_loggradient_cache(
+            H_BdG_func,
+            η,
+            N;
+            parity_sector,
+            target_state,
+            target_Sz,
+            n_flavours,
+        ) : SlaterLogGradientCache(Matrix{ComplexF64}[])
+        amplitude_cache = build_amplitude_cache(
+            H_BdG,
+            parity_sector,
+            occ_ref;
+            n_flavours,
+        )
+        new(
+            Γ,
+            H_BdG_func,
+            η,
+            N,
+            parity_sector,
+            target_state,
+            target_Sz,
+            n_flavours,
+            occ_ref,
+            cache_gradients,
+            slater_loggrad_cache,
+            amplitude_cache,
+        )
     end
 end
+
 getParity(GS::GaussianState) = Int(sign(real(pfaffian(2 * GS.Γ)))) == 1 ? 0 : 1
 getParity(Γ::AbstractMatrix) = Int(sign(real(pfaffian(2 * Γ)))) == 1 ? 0 : 1
-
 Parameters(GS::GaussianState) = GS.η
 
-# Gaussian (Bloch-Messiah/Pfaffian) amplitudes ⟨s|ψ⟩ are complex in general, so a joint PEPS×Gaussian wavefunction is complex even when the PEPS is real. 
+function _auxiliary_chemical_potential(
+    Haux::Hermitian,
+    particle_number::Integer,
+    gap_tolerance::Real,
+)
+    number_of_modes = size(Haux, 1)
+    energies = eigvals(Haux)
+    energy_scale = max(maximum(abs, energies), one(eltype(energies)))
+    if particle_number == 0
+        return first(energies) - energy_scale
+    elseif particle_number == number_of_modes
+        return last(energies) + energy_scale
+    end
+
+    fermi_gap = energies[particle_number + 1] - energies[particle_number]
+    fermi_gap > gap_tolerance || throw(ArgumentError(
+        "the requested particle number $particle_number is not closed shell: " *
+        "the Fermi gap is $fermi_gap, which does not exceed " *
+        "gap_tolerance=$gap_tolerance",
+    ))
+    return (energies[particle_number] + energies[particle_number + 1]) / 2
+end
+
+function _triangular_aux_bdg_function(
+    Lx::Integer,
+    Ly::Integer,
+    bonds,
+    hopping_phases::AbstractArray,
+    chemical_potential::Real,
+    number_of_parameters::Integer,
+    expand_parameters::Function=identity,
+)
+    number_of_sites = Lx * Ly
+    number_of_modes = 2number_of_sites
+    return function (parameters, requested_number_of_modes)
+        requested_number_of_modes == number_of_modes || throw(DimensionMismatch(
+            "the triangular auxiliary state contains $number_of_modes modes, " *
+            "got N=$requested_number_of_modes",
+        ))
+        length(parameters) == number_of_parameters || throw(DimensionMismatch(
+            "the triangular auxiliary state requires $number_of_parameters " *
+            "parameters, got $(length(parameters))",
+        ))
+        full_parameters = expand_parameters(parameters)
+        length(full_parameters) == 6number_of_sites || throw(DimensionMismatch(
+            "the expanded triangular auxiliary parameters must have length " *
+            "$(6number_of_sites), got $(length(full_parameters))",
+        ))
+
+        H_buffer = zeros(ComplexF64, number_of_modes, number_of_modes)
+        for bond in bonds
+            x, y = bond.source
+            x2, y2 = bond.target
+            site = (y - 1) * Lx + x
+            amplitude = full_parameters[3(site - 1) + bond.direction]
+            t = amplitude * hopping_phases[x, y, bond.direction]
+            for spin in 1:2
+                i = _spinful_aux_index(x, y, spin, Lx)
+                j = _spinful_aux_index(x2, y2, spin, Lx)
+                H_buffer[i, j] = H_buffer[i, j] + t
+                H_buffer[j, i] = H_buffer[j, i] + conj(t)
+            end
+        end
+
+        field_offset = 3number_of_sites
+        for y in 1:Ly, x in 1:Lx
+            site = (y - 1) * Lx + x
+            Mx = full_parameters[field_offset + 3(site - 1) + 1]
+            My = full_parameters[field_offset + 3(site - 1) + 2]
+            Mz = full_parameters[field_offset + 3(site - 1) + 3]
+            up = _spinful_aux_index(x, y, 1, Lx)
+            down = _spinful_aux_index(x, y, 2, Lx)
+            H_buffer[up, up] = H_buffer[up, up] + Mz / 2
+            H_buffer[down, down] = H_buffer[down, down] - Mz / 2
+            H_buffer[up, down] = H_buffer[up, down] + (Mx - im * My) / 2
+            H_buffer[down, up] = H_buffer[down, up] + (Mx + im * My) / 2
+        end
+
+        particle_block = copy(H_buffer) - chemical_potential * I
+        zero_block = zeros(ComplexF64, number_of_modes, number_of_modes)
+        return Hermitian([
+            particle_block zero_block
+            zero_block -transpose(particle_block)
+        ])
+    end
+end
+
+# Gaussian (Bloch-Messiah/Pfaffian) amplitudes ⟨s|ψ⟩ are complex in general, so a joint PEPS×Gaussian wavefunction is complex even when the PEPS is real.
 Base.eltype(::GaussianState) = ComplexF64
 
 """
@@ -111,9 +251,29 @@ Updates the variational parameters `η` of the Gaussian state `GS` and recompute
 """
 function write!(GS::GaussianState, η::AbstractVector{<:Number})
     GS.η = η
-    GS.Γ, GS.occ_ref = get_Γ_from_H_BdG(GS.H_BdG_func(η, GS.N), GS.parity_sector; target_state=GS.target_state)
-    GS.slater_loggrad_cache = build_slater_loggradient_cache(GS.H_BdG_func, η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state)
-    GS.amplitude_cache = build_amplitude_cache(GS.H_BdG_func(η, GS.N), GS.parity_sector, GS.occ_ref)
+    H_BdG = GS.H_BdG_func(η, GS.N)
+    GS.Γ, GS.occ_ref = get_Γ_from_H_BdG(
+        H_BdG,
+        GS.parity_sector;
+        target_state=GS.target_state,
+        target_Sz=GS.target_Sz,
+        n_flavours=GS.n_flavours,
+    )
+    GS.slater_loggrad_cache = GS.cache_gradients ? build_slater_loggradient_cache(
+        GS.H_BdG_func,
+        η,
+        GS.N;
+        parity_sector=GS.parity_sector,
+        target_state=GS.target_state,
+        target_Sz=GS.target_Sz,
+        n_flavours=GS.n_flavours,
+    ) : SlaterLogGradientCache(Matrix{ComplexF64}[])
+    GS.amplitude_cache = build_amplitude_cache(
+        H_BdG,
+        GS.parity_sector,
+        GS.occ_ref;
+        n_flavours=GS.n_flavours,
+    )
 end
 
 ###########################################################################################################
@@ -165,7 +325,7 @@ function build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, Lx::Int, Ly::In
     pairing_x = [((i % Lx == 0) ? 0.0 : pairing_x[i - div(i, Lx)]) for i in 1:(N-1)]
 
     # Constructing T and D blocks
-    T = diagm( 
+    T = diagm(
         0 => μs,
         1 => hopping_x,
         Lx => hopping_y,
@@ -184,6 +344,147 @@ function build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, Lx::Int, Ly::In
     return Hermitian(H_BdG)
 end
 build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, N::Int) = build_general_H_BdG_2D_NN(η::AbstractVector{<:Number}, Int(sqrt(N)), Int(sqrt(N)))
+
+"""
+    build_general_H_BdG_2D_NN_fixed_Sz(η, Lx, Ly, n_flavours)
+
+Function that builds a general mean-field Bogoliubov-de Gennes Hamiltonian matrix with nearest-neighbor (NN) hopping
+and pairing terms for a given parton flavour number by fixing the flavour sector.
+This function should be used, when a parton description of a spin lattice model is wanted with a fixed flavour sector.
+
+For a spin-S system on an `L = Lx * Ly` lattice the number of parton species is `n_flavours = 2S+1`.
+The number of interleaved parton modes is `N = n_flavours * Lx * Ly`.
+
+This function sets all matrix elements to zero, that changes the total flavour count of the system.
+Example (spin-1/2 system):
+- the term `c†_{i,↑} c_{j,↓}` is not allowed, because it changes the total Sz by 1 (from ↓=0 to ↑=1)
+
+# Arguments
+- `η::AbstractVector{<:Number}`: The vector of variational parameters used to construct H_BdG, which can be optimized during the training process.
+- `Lx::Int`: The number of lattice sites in the x-direction of the original lattice (spin model).
+- `Ly::Int`: The number of lattice sites in the y-direction of the original lattice (spin model).
+- `n_flavours::Int`: The number of parton flavours.
+
+# Returns
+- `H_BdG::Hermitian`: `[T D; D' -Tᵀ]`, with size `(2N, 2N)` and `N = n_flavours * Lx * Ly`.
+
+# Note
+This only makes sure that the Sz sector is preserved, which sector you land in is decided in `get_Γ_from_H_BdG`.
+"""
+function build_general_H_BdG_2D_NN_fixed_Sz(η::AbstractVector{<:Number}, Lx::Int, Ly::Int, n_flavours::Int)
+    N = n_flavours * Lx * Ly
+
+    n_flavours >= 1 || throw(ArgumentError(
+        "n_flavours must be positive, got $n_flavours",
+    ))
+    expected_parameters = get_max_num_MF_params_NN_parton(Lx, Ly, n_flavours)
+    length(η) == expected_parameters || throw(DimensionMismatch(
+        "expected $expected_parameters mean-field parameters for " *
+        "Lx=$Lx, Ly=$Ly, n_flavours=$n_flavours; got $(length(η))",
+    ))
+
+    # offsets into η for each parameter block: μ, then hopping x/y, then pairing x/y
+    o_hx = N
+    o_hy = o_hx + n_flavours * get_max_num_hopping_x_NN(Lx, Ly)
+    o_px = o_hy + n_flavours * get_max_num_hopping_y_NN(Lx, Ly)
+    o_py = o_px + n_flavours * get_max_num_hopping_x_NN(Lx, Ly)
+
+    xbond(i) = i - div(i, Lx) # x-bond index for site i (1..N)
+    #=
+        For the hopping, we only allow hopping between same flavours.
+        So for a parton mode p=(i,f), the only allowed hopping is to p'=(j,f) with j a NN of i.
+        For the hopping this is: p -> p + n_flavours (x direction) and p -> p + n_flavours*Lx (y direction).
+
+        Boundary terms (every L-th bond: i % Lx == 0) are removed.
+
+        η[ o + (xbond(i) - 1) * n_flavours + f ]
+            ↑        ↑                       ↑
+            |        bond b, 0-based         flavour slot inside the bond's block
+            start of the x-hopping (o_hx) or x-pairing (o_px) block in η
+    =#
+    xband(o) = [let i = parton_site(p, n_flavours)
+                    i % Lx == 0 ? 0 : η[o + (xbond(i) - 1) * n_flavours + parton_flavour(p, n_flavours)]
+                end
+                for p in 1:(N - n_flavours)]
+    yband(o) = [ η[o + p] for p in 1:(N - n_flavours*Lx) ]
+
+    μs = η[1:N]
+    hopping_x, hopping_y = xband(o_hx), yband(o_hy)
+    pairing_x, pairing_y = xband(o_px), yband(o_py)
+
+    dx, dy = n_flavours, n_flavours * Lx
+
+    # Constructing T and D blocks
+    T = diagm(
+        0 => μs,
+        dx => hopping_x,
+        dy => hopping_y,
+        -dx => conj.(hopping_x),
+        -dy => conj.(hopping_y)
+    )
+
+    #=
+        For the pairing, only flavour-neutral pairings are allowed, i.e. c_i,↑ c_j,↓ or c_i,↓ c_j,↑ (+ h.c.).
+        Flavour reversal (i,f) -> (i, n_flavours+1-f), e.g. for spin-1/2: (i,↑) -> (i,↓) and (i,↓) -> (i,↑). Also for spin-1: (i,+) -> (i,-), (i,0) -> (i,0), (i,-) -> (i,+).
+
+        (parton_site(p,n_flavours) - 1) * n_flavours   +   (n_flavours + 1 - parton_flavour(p, n_flavours))
+            └──────── parton site block ────────┘              └──────── = n_flavours+1−f ───────┘
+                                                                partner flavour in the same block
+    =#
+    partner = [ (parton_site(p, n_flavours) - 1) * n_flavours + (n_flavours + 1 - parton_flavour(p, n_flavours)) for p in 1:N ]
+
+    # Only the upper bands are built, so subtracting the transpose fills the lower half and makes D antisymmetric (D[m,m'] = -D[m',m]) by construction.
+    D_up = diagm(N, N,
+        dx => -pairing_x,
+        dy => -pairing_y
+    )[:, partner]
+    D = D_up - transpose(D_up)
+
+    #=
+        Example for spin-1/2 (n_flavours=2) on a 2x2 lattice:
+        partner = [2,1,4,3] -> lookup table ( e.g. parton 1=(1,↑) has partner 2=(1,↓), parton 3=(2,↑) has partner 4=(2,↓) and so on...)
+
+              1↑  1↓  2↑  2↓                        1↑  1↓  2↑  2↓
+        1↑ [  .   .  -p₁  .  ]              1↑ [  .   .   .  -p₁ ]
+        1↓ [  .   .   .  -p₂ ]   ─────→     1↓ [  .   .  -p₂  .  ]
+        2↑ [  .   .   .   .  ] [:,partner]  2↑ [  .   .   .   .  ]
+        2↓ [  .   .   .   .  ]              2↓ [  .   .   .   .  ]
+    =#
+
+    H_BdG = Matrix{eltype(η)}([T D; D' -transpose(T)])
+    return Hermitian(H_BdG)
+end
+build_general_H_BdG_2D_NN_fixed_Sz(η::AbstractVector{<:Number}, N::Int, n_flavours::Int) = build_general_H_BdG_2D_NN_fixed_Sz(η::AbstractVector{<:Number}, Int(sqrt(N)), Int(sqrt(N)), n_flavours)
+
+parton_site(m::Int, n_flavours::Int) = (m - 1) ÷ n_flavours + 1 # original site index of a parton mode
+parton_flavour(m::Int, n_flavours::Int) = mod1(m, n_flavours)   # flavour index of a parton mode (1..n_flavours)
+
+"""
+    get_max_num_MF_params_NN_parton(Lx, Ly, n_flavours)
+
+Number of free mean-field parameters of `build_general_H_BdG_2D_NN_fixed_Sz`:
+
+- Per parton: `n_flavours` (one on-site potential).
+- Per NN bond: `n_flavours` hoppings (one per flavour) and `n_flavours` flavour-neutral pairings.
+
+On-site pairing is not part of the ansatz, so there are no per-site pairing parameters.
+
+Sites and bonds are counted on the **original** (spin) lattice `Lx * Ly`, not on the interleaved
+parton lattice — the flavour multiplicity is already contained in the per-flavour counts above.
+At `n_flavours = 1` this reduces exactly to `get_max_num_MF_params_NN(Lx, Ly)`.
+
+# Arguments
+- `Lx::Int`: The number of lattice sites in the x-direction of the original lattice (spin model)
+- `Ly::Int`: The number of lattice sites in the y-direction of the original lattice (spin model)
+- `n_flavours::Int`: Number of parton flavours (2S+1 for spin-S systems)
+"""
+function get_max_num_MF_params_NN_parton(Lx::Int, Ly::Int, n_flavours::Int)
+    L = Lx * Ly
+    n_bonds = get_max_num_hopping_x_NN(Lx, Ly) + get_max_num_hopping_y_NN(Lx, Ly)
+
+    return L * n_flavours + 2 * n_flavours * n_bonds
+end
+
 
 # helper functions for maximal number of parameters for 2D NN Hamiltonian
 get_max_num_MF_params_NN(Lx::Int, Ly::Int) = 5 * Lx * Ly - 2 * (Lx + Ly)
@@ -227,6 +528,7 @@ function build_H_BdG_derivatives(H_BdG_func::Function, η::AbstractVector{<:Numb
 
     return dHs
 end
+
 function build_H_BdG_derivatives(GS::GaussianState)
     return build_H_BdG_derivatives(GS.H_BdG_func, GS.η, GS.N)
 end
@@ -250,23 +552,23 @@ end
 """
     get_prob(GS::GaussianState, occ_dict::Dict{Int, Int})
 
-Calculate the probability of observing a specific occupation configuration `occ_dict` in the Gaussian state `GS`. 
+Calculate the probability of observing a specific occupation configuration `occ_dict` in the Gaussian state `GS`.
 
-The probability is computed using the covariance matrix `Γ` and the occupation projector matrix `M` corresponding to the specified occupation configuration. 
+The probability is computed using the covariance matrix `Γ` and the occupation projector matrix `M` corresponding to the specified occupation configuration.
 
 The formula uses Eq. (20) from Bravyi (https://arxiv.org/abs/quant-ph/0404180):
 
 (TODO: Add our future paper maybe)
 
 ```
-P(s) = |<Ψ(s)|Ψ(s)>|² = <Ψ| P̂ |Ψ> = Tr(ρ * P̂) 
+P(s) = |<Ψ(s)|Ψ(s)>|² = <Ψ| P̂ |Ψ> = Tr(ρ * P̂)
      = (0.5^N_measured) * sqrt(abs(det(Γ * 2 * M - I)))
 ```
 where `P̂` is the occupation projector defined by `occ_dict`.
 
 # Keyword Arguments
 - `GS::GaussianState`: The Gaussian state for which to compute the probability.
-- `occ_dict::Dict{Int, Int}`: A dictionary mapping site indices to occupation numbers (e.g. Dict(2 => 0) means site 2 is unoccupied) for the sites being measured. 
+- `occ_dict::Dict{Int, Int}`: A dictionary mapping site indices to occupation numbers (e.g. Dict(2 => 0) means site 2 is unoccupied) for the sites being measured.
                               This must not contain all sites, as one can also construct joint probabilities with only specifying a subset of sites.
 
 # Returns
@@ -339,7 +641,7 @@ Builds the matrix M for the occupation projector `P_j(θ) ∼ exp(i/2 θᵀ M θ
 [ 0  s_j]
 [-s_j  0]
 ```
-where `s_j = 1 - 2*n_j` and `n_j` is the occupation number for site `j`. The resulting matrix `M` has dimensions `2N x 2N`, where `N` is the total number of sites. 
+where `s_j = 1 - 2*n_j` and `n_j` is the occupation number for site `j`. The resulting matrix `M` has dimensions `2N x 2N`, where `N` is the total number of sites.
 
 Note: This is already in the Majorana basis and uses the convention:
 ```
@@ -392,8 +694,8 @@ It uses the overlap formula from: http://arxiv.org/abs/2111.09101 and https://li
 
 # Keyword Arguments
 - `cache::GaussianAmplitudeCache`: The preconstructed cache of intermediate matrices.
-- `occ_string::Vector{Int}`: The configuration `s`. 
-                            A vector of occupation numbers (0 or 1) for each site, of length `N`. 
+- `occ_string::Vector{Int}`: The configuration `s`.
+                            A vector of occupation numbers (0 or 1) for each site, of length `N`.
                             The ordering of the occupation string is: `[n_1, n_2, ..., n_N]` where `n_j` is the occupation number for site `j`.
 
 # Returns
@@ -434,8 +736,14 @@ end
 Preconstructs the matrices and factors needed for efficient amplitude calculations in Gaussian states via `get_amplitude(cache::GaussianAmplitudeCache, occ_string::Vector{Int})`.
 
 """
-function build_amplitude_cache(H_BdG::Hermitian, parity::Int, occ_ref::Vector{Int})
-    _, M = bogoliubov(H_BdG)
+function build_amplitude_cache(
+    H_BdG::Hermitian,
+    parity::Int,
+    occ_ref::Vector{Int};
+    n_flavours::Int=1,
+)
+    E, M = bogoliubov(H_BdG)
+    M = align_bogoliubov_to_Sz(H_BdG, E, M, n_flavours)
 
     #  select the occupied modes from M based on the reference (Gaussian) state
     N = size(H_BdG, 1) ÷ 2
@@ -448,10 +756,10 @@ function build_amplitude_cache(H_BdG::Hermitian, parity::Int, occ_ref::Vector{In
 
     D, Ubar, Vbar, _ = get_mats_from_bloch_messiah(Dmat_prime, UVmat_prime, Cmat_prime)
 
-    # Vbar_trunc has the structure [ I 0; 0 ⨁_p (i v_p σ_y)] so we need to skip the identity block
-    vp_prod_start_ind = findlast(x -> abs(x) ≈ 1.0, diag(Vbar))
-    vp_prod_start_ind = vp_prod_start_ind === nothing ? 2 : vp_prod_start_ind + 2
-    v_prod = prod([Vbar[i-1, i] for i in vp_prod_start_ind:2:size(Vbar, 2)])
+    # A paired block contributes det(V̄ₚ)=vₚ², while a fully occupied
+    # blocked level contributes unit determinant. This gauge-invariant form
+    # avoids relying on a particular ordering of canonical blocks.
+    v_prod = exp(logabsdet(Vbar)[1] / 2)
 
     # compute full matrices for overlap
     R_mat_full = D * Vbar # has the same ordering as H
@@ -460,12 +768,17 @@ function build_amplitude_cache(H_BdG::Hermitian, parity::Int, occ_ref::Vector{In
 
     return GaussianAmplitudeCache(R_mat_full, Q_mat, parity, 1 / v_prod)
 end
-build_amplitude_cache(GS::GaussianState) = build_amplitude_cache(GS.H_BdG_func(GS.η, GS.N), GS.parity_sector, GS.occ_ref)
+build_amplitude_cache(GS::GaussianState) = build_amplitude_cache(
+    GS.H_BdG_func(GS.η, GS.N),
+    GS.parity_sector,
+    GS.occ_ref;
+    n_flavours=GS.n_flavours,
+)
 
 """
     get_Slater_Ek_terms(H_BdG::Hermitian)
 
-Given a BdG Hamiltonian, returns the terms that contribute to the local energy for a given sample. 
+Given a BdG Hamiltonian, returns the terms that contribute to the local energy for a given sample.
 For quadratic Hamiltonians, only configurations differing by at most two occupations can contribute as one only as terms:
 - c_i^† c_j     (hopping j -> i)
 - c_i c_j^†     (hopping i -> j)
@@ -499,7 +812,7 @@ end
 """
     build_slater_loggradient_cache(
         GS::GaussianState;
-        dH_dη=nothing, 
+        dH_dη=nothing,
         N::Int;
         parity_sector::Int=0,
         target_state::Int=0
@@ -524,17 +837,25 @@ where `Fⱼ = Mⱼ - Γ⁻¹` and `Mⱼ` is the matrix for the occupation projec
     - This is a Sylvester equation of the form `A X + X B + C = 0` with `A = H`, `B = -H`, `C = -[dH, Γ]` and `X = dΓ`, which can be solved efficiently with `LinearAlgebra.sylvester`.
 """
 function build_slater_loggradient_cache(
-    H_BdG_func::Function, 
-    η::AbstractVector{<:Number}, 
+    H_BdG_func::Function,
+    η::AbstractVector{<:Number},
     N::Int;
     parity_sector::Int=0,
-    target_state::Int=0
+    target_state::Int=0,
+    target_Sz::Union{Nothing,Real}=nothing,
+    n_flavours::Int=1,
 )
     H = Matrix(H_BdG_func(η, N))
     # as Γ is in the Majorana basis (qq), we need to transform H to the same basis
     H_maj = transform_H_to_majorana_qq(H)
     dim = size(H_maj, 1)
-    Γ, _ = get_Γ_from_H_BdG(Hermitian(H), parity_sector; target_state=target_state)
+    Γ, _ = get_Γ_from_H_BdG(
+        Hermitian(H),
+        parity_sector;
+        target_state,
+        target_Sz,
+        n_flavours,
+    )
 
     dHs = build_H_BdG_derivatives(H_BdG_func, η, N)
     dΓs = Vector{Matrix{ComplexF64}}(undef, length(dHs))
@@ -565,7 +886,7 @@ function build_slater_loggradient_cache(
     # # Optional regularization near gap closings: H dΓ - dΓ (H + reg) + C = 0 to make it more robust
     # reg = 1e-10
     # B = -H_maj + reg .* I_dim
-       
+
     for a in eachindex(dHs)
         dH_maj = transform_H_to_majorana_qq(Matrix(dHs[a]))
         C = dH_maj * Γ - Γ * dH_maj                    # [dH, Γ]
@@ -580,39 +901,384 @@ function build_slater_loggradient_cache(
 end
 
 function build_slater_loggradient_cache(GS::GaussianState)
-    return build_slater_loggradient_cache(GS.H_BdG_func, GS.η, GS.N; parity_sector=GS.parity_sector, target_state=GS.target_state)
+    return build_slater_loggradient_cache(
+        GS.H_BdG_func,
+        GS.η,
+        GS.N;
+        parity_sector=GS.parity_sector,
+        target_state=GS.target_state,
+        target_Sz=GS.target_Sz,
+        n_flavours=GS.n_flavours,
+    )
 end
+
+"""
+    sz_per_mode(N, n_flavours)
+
+The Sz carried by each of the `N` parton modes: `[S, S-1, …, -S]` for `n_flavours = 2S+1`, repeated
+over the lattice sites in the interleaved mode ordering.
+
+Returns a vector of length `N` with the Sz values for each mode.
+E.g. for spin-1/2 (n_flavours=2) on a 2x2 lattice (N=8), the modes are ordered as:
+```
+1↑, 1↓, 2↑, 2↓, 3↑, 3↓, 4↑, 4↓
+```
+and the Sz values are:
+```
+[ 1/2, -1/2, 1/2, -1/2, 1/2, -1/2, 1/2, -1/2 ]
+```
+"""
+sz_per_mode(N::Int, n_flavours::Int) = [(n_flavours + 1) / 2 - parton_flavour(m, n_flavours) for m in 1:N]
+
+"""
+    sz_operator_BdG(N, n_flavours)
+
+The Sz operator in the BdG basis is diagonal with the Sz values for each mode in the upper block and their negatives in the lower block.
+
+"""
+function sz_operator_BdG(N::Int, n_flavours::Int)
+    s = sz_per_mode(N, n_flavours)
+    return Diagonal(vcat(s, -s))
+end
+
+"""
+    align_bogoliubov_to_Sz(H_BdG, E, M, n_flavours; deg_tol=1e-8, comm_tol=1e-8)
+
+Rotate `M` inside each degenerate quasiparticle multiplet so that its columns are Ŝz eigenvectors, and
+return the rotated `M`. A no-op for `n_flavours == 1`, where Ŝz ≡ 0.
+
+`[H_BdG, Ŝz] = 0` guarantees that a *simultaneous* eigenbasis of the two exists — it does not guarantee
+that `eigen` hands you one. Inside a degenerate eigenspace the eigensolver is free to return any basis,
+and it generally returns superpositions of the ±Sz partners. A spin-symmetric mean field has a fully
+degenerate quasiparticle spectrum, so this is the normal case rather than an edge case: without this
+rotation the charges `q` in `select_occ_ref_by_target_Sz` come out fractional (e.g. `2q = ±0.40` for a
+uniform spin-1/2 mean field whose `‖[H, Ŝz]‖` is exactly 0) and the quantisation assert there fires,
+blaming the Hamiltonian for what is really a basis choice.
+
+Only degenerate multiplets are touched, so the spectrum is untouched and `M` stays a valid Bogoliubov
+transformation. Columns `1:N` are rotated by a unitary `W` that is block diagonal over the multiplets
+and columns `N+1:2N` by `conj(W)` — exactly what the particle-hole structure `M = [X  C(X)]` requires,
+since `C(X·W) = C(X)·conj(W)`.
+
+# Keyword Arguments
+- `deg_tol`: Relative tolerance (to the spectral scale) for treating neighbouring levels as degenerate.
+
+"""
+function align_bogoliubov_to_Sz(H_BdG::Hermitian, E::AbstractVector, M::AbstractMatrix, n_flavours::Int;
+                                deg_tol=1e-8, comm_tol=1e-8)
+    N = size(M, 1) ÷ 2
+    n_flavours == 1 && return M   # Ŝz ≡ 0, every basis is an Ŝz eigenbasis
+
+    Sz_op = sz_operator_BdG(N, n_flavours)
+    scale = max(maximum(abs, @view E[1:N]), one(real(eltype(E))))
+    comm = H_BdG * Sz_op - Sz_op * H_BdG # commutator [H, Ŝz]
+
+    #=
+        Sz conservation has to be checked here, on H itself, and not downstream on the quasiparticle
+        charges: after the rotation below, the charges of a degenerate multiplet are eigenvalues of the
+        *projected* Ŝz and so come out quantised by construction — a mean field with ‖[H, Ŝz]‖ = 0.8
+        was seen to yield charges of exactly ±1. The commutator is both the real precondition and the
+        cheaper test (Sz_op is diagonal, so this is O(N²) against the O(N³) diagonalization).
+    =#
+    commutator_norm = norm(comm, Inf)
+    commutator_norm <= comm_tol * scale || throw(ArgumentError(
+        "the BdG Hamiltonian does not conserve Sz " *
+        "(‖[H, Ŝz]‖=$commutator_norm)",
+    ))
+
+    W = Matrix{eltype(M)}(I, N, N)
+
+    # we walk through the sorted quasiparticle energies and rotate each degenerate multiplet into an Ŝz eigenbasis
+    k = 1
+    while k <= N
+        j = k
+        while j < N && abs(E[j+1] - E[k]) <= deg_tol * scale # skip over degenerate multiplet
+            j += 1
+        end
+        if j > k # degenerate multiplet found, rotate it into an Ŝz eigenbasis
+            Mc = @view M[:, k:j] # the degenerate multiplet of quasiparticle modes
+            W[k:j, k:j] = eigen(Hermitian(Mc' * Sz_op * Mc)).vectors
+        end
+        k = j + 1
+    end
+
+    M_aligned = similar(M)
+    M_aligned[:, 1:N] = @view(M[:, 1:N]) * W
+    M_aligned[:, N+1:2N] = @view(M[:, N+1:2N]) * conj(W)
+    return M_aligned
+end
+
+"""
+    select_occ_ref_by_target_Sz(M, E, parity_sector, parity_vac, target_Sz, target_state, n_flavours)
+
+Pick the quasiparticle occupation reference that puts the Bogoliubov state in the Sz sector `target_Sz`, at the `target_state`-th lowest quasiparticle energy cost.
+
+Here `Sz = Σ_m s_m n_m` is the total magnetization, with `s_m ∈ {S, S-1, …, -S}` the Sz carried and `n_m` the occupation of parton mode `m`.
+
+In `get_Γ_from_H_BdG` we build `G_dirac = M * Diagonal([occ; 1 .- occ]) * M'`, whose diagonal is the parton
+occupation.
+With `M = [U conj(V); V conj(U)]` that reads:
+
+```
+    n_m(occ) = Σ_k [ occ[k]·|U[m,k]|² + (1 - occ[k])·|V[m,k]|² ]
+```
+and
+```
+    Sz(occ) = Sz_vac + Σ_k occ[k]·q[k],   Sz_vac = Σ_m s_m Σ_k |V[m,k]|²,
+                                          q[k]   = Σ_m s_m (|U[m,k]|² - |V[m,k]|²)
+```
+for a quasiparticle occupation reference `occ`.
+
+Each quasiparticle carries a definite Sz charge `q[k]` (one of the `±s_m`).
+
+# Choosing the reference
+
+Minimise `Σ occ[k]·E[k]` subject to `Σ occ[k]·q[k] = target_Sz - Sz_vac` and the parity constraint
+`sum(occ) ≡ parity_sector + parity_vac (mod 2)`.
+
+Occupying quasiparticles never changes their number's parity independently of Sz, so the Sz sector and `parity_sector` stay independent knobs.
+
+`target_state` walks up the energy ladder *inside* that sector: `0` is the cheapest admissible `occ`,
+`1` the next cheapest, and so on. Each `occ` is a distinct quasiparticle configuration, so the ranking
+is over the many-body states of the sector, not over single modes — unlike the `target_Sz === nothing`
+path in `get_Γ_from_H_BdG`, which just fills `2·target_state` extra modes by index.
+
+# Keyword Arguments
+- `M::AbstractMatrix`: The Bogoliubov transformation matrix.
+- `E::AbstractVector`: The quasiparticle energies.
+- `parity_sector::Int`: The parity sector to select (0 or 1).
+- `parity_vac::Int`: The parity of the vacuum state (0 or 1).
+- `target_Sz::Real`: The target Sz sector (total magnetization) to select.
+- `target_state::Int`: Which state of the sector to take: 0 = lowest energy, 1 = first excited, …
+- `n_flavours::Int`: The number of flavours (2S+1 for spin-S systems).
+
+# Optional Keyword Arguments
+- `charge_tol::Real`: Tolerance for checking quantisation of quasiparticle charges.
+- `deg_warn_tol::Real`: Tolerance for warning that the selected state is degenerate with the next one up.
+
+"""
+function select_occ_ref_by_target_Sz(M::AbstractMatrix, E::AbstractVector, parity_sector::Int, parity_vac::Int,
+                              target_Sz::Real, target_state::Int, n_flavours::Int; charge_tol=1e-8, deg_warn_tol=1e-8)
+    target_state >= 0 || throw(ArgumentError(
+        "target_state must be nonnegative, got $target_state",
+    ))
+    N = size(M, 1) ÷ 2
+    N % n_flavours == 0 || throw(ArgumentError(
+        "N=$N modes is not divisible by n_flavours=$n_flavours",
+    ))
+
+    Sz_arr = sz_per_mode(N, n_flavours) # [S, S-1, …, -S] for n_flavours = 2S+1
+
+    U, V = get_bogoliubov_blocks(M)
+    Ua, Va = abs2.(U), abs2.(V)
+
+    Sz_vac = sum(Sz_arr .* vec(sum(Va, dims=2))) # The vacuum Sz is the sum of the Sz of the occupied modes in the Bogoliubov vacuum (the negative-energy modes).
+    q = vec(transpose(Sz_arr) * (Ua .- Va)) # The Sz charge q of each quasiparticle = the Sz it adds (particle part U) minus the Sz it removes (hole part V).
+
+    #=
+        The Sz charges are quantised in half-integer units, so 2q is an integer. This is a
+        post-condition on the *basis*, not a test of the Hamiltonian: Sz conservation is asserted on
+        H itself in `align_bogoliubov_to_Sz`, which must have run on M before it gets here — without
+        that rotation a perfectly Sz-conserving mean field still lands fractional charges here, and
+        with it a broken one can still land quantised ones. What this catches is an unrotated M
+        reaching us (a caller that skipped the alignment) or a multiplet the degeneracy tolerance
+        failed to group.
+    =#
+    Q = round.(Int, 2 .* q)
+    charge_deviation = maximum(abs, 2 .* q .- Q)
+    charge_deviation < charge_tol || throw(ArgumentError(
+        "quasiparticle Sz charges are not quantized (maximum deviation " *
+        "$charge_deviation); the Bogoliubov basis is not Sz-aligned",
+    ))
+
+    target = round(Int, 2 * (target_Sz - Sz_vac)) # The target Sz sector in half-integer units, relative to the vacuum Sz. The factor of 2 is because the quasiparticle charges are quantised in half-integer units.
+    abs(2 * (target_Sz - Sz_vac) - target) < charge_tol || throw(ArgumentError(
+        "target_Sz=$target_Sz is not reachable from vacuum Sz=$Sz_vac in " *
+        "half-integer steps",
+    ))
+
+    parity_target = (parity_sector + parity_vac) % 2
+    Es = @view E[1:N] # The quasiparticle energies of the first N modes (the positive-energy modes)
+
+    # --- k-best min-cost DP (Dynamic programming) over (accumulated 2·Sz, parity of the occupied count) -------------
+    lo = sum(min.(Q, 0))        # The lowest possible 2·Sz that can be reached by occupying quasiparticles (the sum of the negative charges)
+    hi = sum(max.(Q, 0))        # The highest possible 2·Sz that can be reached by occupying quasiparticles (the sum of the positive charges)
+    W = hi - lo + 1             # The width of the DP table in the Sz dimension, which is the range of possible 2·Sz values that can be reached by occupying quasiparticles.
+    idx_of(qs) = qs - lo + 1    # The index in the DP table corresponding to a given 2·Sz value `qs`. The DP table is indexed from 1 to W, so we shift the range [lo, hi] to [1, W].
+
+    #=
+        cost[idx, parity, r] = the r-th cheapest energy, ascending in r, over the configurations of the
+        modes processed so far that reach charge `idx` with occupied-count parity `parity`.
+        r=1 is the cheapest, r=2 is the second cheapest, etc.
+
+        One rank more than requested is carried (R = target_state + 2). The extra slot is never
+        selected, it only lets us see whether the selected state is degenerate with the next one up —
+        the case in which the reference is not unique and can jump between optimization steps.
+    =#
+    K = target_state + 1            # The rank of the target state in the Sz sector, 1-based.
+    R = K + 1                       # Next rank after the target state, used to check for degeneracy.
+    cost = fill(Inf, W, 2, R)       # The DP table of costs, initialized to Inf. For each Sz sector index (1 to W), we store the parity (0 or 1) and the R cheapest energies.
+    cost[idx_of(0), 1, 1] = 0.0     # The cost of reaching Sz=0 with even parity and rank 1 is 0, because the empty configuration has zero energy and zero Sz. This is the base case of the DP.
+    took = falses(N, W, 2, R)       # stores whether the k-th mode was occupied (true) or not (false) for the r-th cheapest configuration reaching (idx, parity). This is used to reconstruct the occupation reference later.
+    p_rank = zeros(Int, N, W, 2, R) # stores the rank of the predecessor configuration that led to the r-th cheapest configuration reaching (idx, parity). This is used to reconstruct the occupation reference later.
+
+    for k in 1:N # loop over the quasiparticle modes, adding one mode at a time to the DP table
+        prev = cost
+        cost = fill(Inf, W, 2, R) # reset the cost table for the next mode
+        for idx in 1:W, parity in 1:2
+            #=
+                The configurations reaching (idx, parity) occur in 2 scenarios:
+
+                1. those that leave mode k empty (already ranked at (idx, parity) in `prev`)
+                2. those that occupy it (ranked at the predecessor state, plus Es[k]).
+
+                Both lists are sorted, so merging their heads R times yields the R best of the union.
+            =#
+            idx0, par0 = idx - Q[k], 3 - parity  # predecessor: occupying one more quasiparticle flips the parity (1 based so 3 - parity gives correctly 1 (even) or 2 (odd))
+            is_allowed = 1 <= idx0 <= W          # the predecessor has a valid DP index, so we can take it
+            i = j = 1                            # merge heads into the skip list / the allowed list
+            for r in 1:R
+                a = prev[idx, parity, i] # the i-th cheapest configuration that leaves mode k empty
+                b = (is_allowed && j <= R) ? prev[idx0, par0, j] + Es[k] : Inf # the j-th cheapest configuration that occupies mode k, if allowed
+                (isfinite(a) || isfinite(b)) || break   # both lists exhausted
+                # take the cheaper of the two, and save which one we took
+                if a <= b
+                    cost[idx, parity, r] = a
+                    p_rank[k, idx, parity, r] = i
+                    i += 1
+                else
+                    cost[idx, parity, r] = b
+                    took[k, idx, parity, r] = true
+                    p_rank[k, idx, parity, r] = j
+                    j += 1
+                end
+            end
+        end
+    end
+
+    target_index = idx_of(target)
+    reachable = 1 <= target_index <= W &&
+                isfinite(cost[target_index, parity_target + 1, 1])
+    reachable || throw(ArgumentError(
+        "target_Sz=$target_Sz is unreachable in parity sector $parity_sector; " *
+        "the unconstrained reachable range is " *
+        "[$(Sz_vac + lo / 2), $(Sz_vac + hi / 2)]",
+    ))
+    isfinite(cost[target_index, parity_target + 1, K]) || throw(ArgumentError(
+        "target_state=$target_state does not exist in the Sz=$target_Sz, " *
+        "parity=$parity_sector sector",
+    ))
+
+    # --- reconstruct the reference -----------------------------------------------------------
+    occ_ref = zeros(Int, N)
+    idx, parity, r = idx_of(target), parity_target + 1, K
+    for k in N:-1:1
+        t = took[k, idx, parity, r]
+        r = p_rank[k, idx, parity, r]   # descend to the predecessor's rank before moving the state
+        if t
+            occ_ref[k] = 1 # occupy mode k
+            idx -= Q[k] # move to the predecessor's Sz index
+            parity = 3 - parity # flip parity when a mode is occupied
+        end
+    end
+
+    # A selected state that is degenerate with the next one up makes the choice arbitrary, and the
+    # amplitudes discontinuous from one write! to the next.
+    e_sel = cost[idx_of(target), parity_target + 1, K]
+    e_next = cost[idx_of(target), parity_target + 1, R]
+    if isfinite(e_next) && abs(e_next - e_sel) < deg_warn_tol * max(1.0, maximum(abs, Es))
+        @warn "select_occ_ref_by_target_Sz: the Sz=$(target_Sz), target_state=$(target_state) reference is degenerate with the next state of the sector. It is not unique and may jump between optimization steps."
+    end
+
+    return occ_ref
+end
+
+"""
+    get_Sz_from_Γ(Γ, n_flavours)
+    get_Sz_from_Γ(GS::GaussianState)
+
+Returns the `⟨Ŝz⟩ = Σ_m s_m n_m` of a Gaussian state, from its covariance matrix.
+
+In the Majorana (qq-ordered) convention we use, the parton mode occupations is given by:
+```
+    n_m = ⟨c†_m c_m⟩ = 1/2 - Γ[2m-1, 2m]
+```
+
+# Note:
+
+This is an expectation value and it is a sharp quantum number only when the state actually sits in an
+Sz sector e.g. was build using the `target_Sz` keyword.
+
+"""
+function get_Sz_from_Γ(Γ::AbstractMatrix, n_flavours::Int)
+    N = size(Γ, 1) ÷ 2 # number of parton modes
+    return sum(sz_per_mode(N, n_flavours)[m] * (0.5 - real(Γ[2m-1, 2m])) for m in 1:N)
+end
+get_Sz_from_Γ(GS::GaussianState) = get_Sz_from_Γ(GS.Γ, GS.n_flavours)
+
 
 """
     get_Γ_from_H_BdG(H_BdG::Hermitian, occ_string::Vector{Int})
 
-Given a Bogoliubov-de Gennes Hamiltonian matrix `H_BdG` and an occupation string `occ_string`, this function computes the correlation matrix Γ in the Majorana basis (qq-ordered). 
+Given a Bogoliubov-de Gennes Hamiltonian matrix `H_BdG` and an occupation string `occ_string`, this function computes the correlation matrix Γ in the Majorana basis (qq-ordered).
 
 # Keyword Arguments
 - `H_BdG::Hermitian`: The Bogoliubov-de Gennes Hamiltonian matrix `H_BdG = [T D; D† -Tᵀ]` (qp-ordered) of size `2N x 2N`.
 - `occ_string::Vector{Int}`: A vector of occupation numbers (0 or 1) for each site, of length `N`.
 
 """
-function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::Int=0)
+function get_Γ_from_H_BdG(
+    H_BdG::Hermitian,
+    parity_sector::Int;
+    target_state::Int=0,
+    target_Sz::Union{Nothing,Real}=nothing,
+    n_flavours::Int=1,
+)
     N = size(H_BdG, 1) ÷ 2
-    @assert target_state >= 0 && target_state <= N "target_state must be between 0 (ground state) and N=$(N) (fully excited state)"
+    target_state >= 0 || throw(ArgumentError(
+        "target_state must be nonnegative, got $target_state",
+    ))
+    parity_sector in (0, 1) || throw(ArgumentError(
+        "parity_sector must be 0 (even) or 1 (odd), got $parity_sector",
+    ))
+    n_flavours >= 1 || throw(ArgumentError(
+        "n_flavours must be positive, got $n_flavours",
+    ))
+    N % n_flavours == 0 || throw(ArgumentError(
+        "N=$N modes is not divisible by n_flavours=$n_flavours",
+    ))
 
     # Diagonalize the BdG Hamiltonian with the Bogoliubov transformation M
-    _, M = bogoliubov(H_BdG)
+    E, M = bogoliubov(H_BdG)
+    M = align_bogoliubov_to_Sz(H_BdG, E, M, n_flavours)
 
     # Construct the Correlation matrix in the Dirac basis (diagonal, quasiparticles) (qp-ordered)
     parity_vac = getParity(get_Γ0_from_H_BdG(H_BdG))
-    nfill = ((parity_sector + parity_vac) % 2) + 2 * target_state # fill correct number of modes depending on the parity_sector and the parity of the ground state for the current M
-    @assert nfill <= N "The parity sector and target state are incompatible for the given system size N=$(N). Please choose a different target_state or parity_sector."
-    hole_occ = ones(Int, N)
-    if nfill > 0
-        @views hole_occ[(N - nfill + 1):N] .= 0
+    particle_occ = if target_Sz === nothing
+        nfill = mod(parity_sector + parity_vac, 2) + 2 * target_state
+        nfill <= N || throw(ArgumentError(
+            "target_state=$target_state is incompatible with parity_sector=" *
+            "$parity_sector for N=$N",
+        ))
+        occupation = zeros(Int, N)
+        nfill > 0 && (@views occupation[(N - nfill + 1):N] .= 1)
+        occupation
+    else
+        select_occ_ref_by_target_Sz(
+            M,
+            E,
+            parity_sector,
+            parity_vac,
+            target_Sz,
+            target_state,
+            n_flavours,
+        )
     end
-    particle_occ = 1 .- hole_occ
+    hole_occ = 1 .- particle_occ
     G_diag_dirac = Diagonal(vcat(particle_occ, hole_occ))
 
     # Transform G to the original basis using the Bogoliubov transformation M (qp-ordered)
-    G_dirac = M * G_diag_dirac * M' 
+    G_dirac = M * G_diag_dirac * M'
 
     # bring to qq-ordering
     perm = begin
@@ -625,11 +1291,11 @@ function get_Γ_from_H_BdG(H_BdG::Hermitian, parity_sector::Int; target_state::I
 
     # Transform G from the Dirac basis to the Majorana basis (qq-ordered) using the transformation matrix Ω
     Ω0 = [1 1; im -im] ./ sqrt(2)
-    Ω = kron(I(N), Ω0) # Extend to all sites 
+    Ω = kron(I(N), Ω0) # Extend to all sites
 
     G_majorana = Ω * G_dirac * Ω'
 
-    # the covariance matrix is then obtained by 
+    # the covariance matrix is then obtained by
     Γ_majorana = ( -im .* (2G_majorana - I)) ./ 2
 
     @assert Γ_majorana ≈ -transpose(Γ_majorana) "Γ is not skew-symmetric!"
@@ -651,7 +1317,7 @@ function transform_H_to_majorana_qq(H_BdG::AbstractMatrix)
 
     # Transform H from the Dirac basis to the Majorana basis (qq-ordered) using the transformation matrix Ω
     Ω0 = [1 1; im -im] ./ sqrt(2)
-    Ω = kron(I(N), Ω0) # Extend to all sites 
+    Ω = kron(I(N), Ω0) # Extend to all sites
 
     H_majorana = Ω * H_qq * Ω'
 
@@ -670,7 +1336,7 @@ function get_Γ0_from_H_BdG(H_BdG::Hermitian)
     G_diag_dirac = build_G_diag_dirac(zeros(Int, N)) # vacuum state
 
     # Transform G to the original basis using the Bogoliubov transformation M (qp-ordered)
-    G_dirac = M * G_diag_dirac * M' 
+    G_dirac = M * G_diag_dirac * M'
 
     # bring to qq-ordering
     perm = begin
@@ -683,11 +1349,11 @@ function get_Γ0_from_H_BdG(H_BdG::Hermitian)
 
     # Transform G from the Dirac basis to the Majorana basis (qq-ordered) using the transformation matrix Ω
     Ω0 = [1 1; im -im] ./ sqrt(2)
-    Ω = kron(I(N), Ω0) # Extend to all sites 
+    Ω = kron(I(N), Ω0) # Extend to all sites
 
     G_majorana = Ω * G_dirac * Ω'
 
-    # the covariance matrix is then obtained by 
+    # the covariance matrix is then obtained by
     Γ_majorana = ( -im .* (2G_majorana - I)) ./ 2
 
     @assert Γ_majorana ≈ -transpose(Γ_majorana) "Γ is not skew-symmetric!"
@@ -778,7 +1444,7 @@ Degenerate spectra are handled robustly by splitting the modes into two groups:
 This guarantees the canonical (anti)commutation relations by construction, so the resulting `M` is always a
 valid Bogoliubov transformation and is well-conditioned for the subsequent Bloch-Messiah decomposition.
 """
-function bogoliubov(H::Hermitian)
+function bogoliubov(H::Hermitian; tol=nothing)
     N = div(size(H, 1), 2)
 
     # Particle-hole conjugation C: [X_u; X_v] -> [conj(X_v); conj(X_u)]. C is the antiunitary
@@ -805,7 +1471,7 @@ function bogoliubov(H::Hermitian)
         F = svd(hcat(X, _ph_conj(X)))
         X = (F.U * F.V')[:, 1:length(pos_idx)]
     end
-    
+
     if n_zero_pairs > 0
         Dblock = @view H[1:N, N+1:end]
         if maximum(abs, Dblock) < 1e-7 * max(maximum(abs, H), one(real(eltype(H))))
@@ -836,9 +1502,9 @@ function bogoliubov(H::Hermitian)
     # E = diag(M' H M) so that E[k] = -E[k+N] exactly.
     E = real.(diag(M' * H * M))
 
-    @assert norm(M' * M - I, Inf) < residual_tol(M) "Bogoliubov M is not unitary."
-    @assert norm(U'U + V'V - I, Inf) < residual_tol(U, V) "Bogoliubov blocks violate U'U + V'V = I."
-    @assert norm(transpose(U) * V + transpose(V) * U, Inf) < residual_tol(U, V) "Bogoliubov blocks violate UᵀV + VᵀU = 0."
+    @assert norm(M' * M - I, Inf) < (isnothing(tol) ? residual_tol(M) : tol) "Bogoliubov M is not unitary."
+    @assert norm(U'U + V'V - I, Inf) < (isnothing(tol) ? residual_tol(U, V) : tol) "Bogoliubov blocks violate U'U + V'V = I."
+    @assert norm(transpose(U) * V + transpose(V) * U, Inf) < (isnothing(tol) ? residual_tol(U, V) : tol) "Bogoliubov blocks violate UᵀV + VᵀU = 0."
 
     return E, M
 end
@@ -884,7 +1550,7 @@ basis exactly (to machine precision) and robustly via a single real symmetric ei
 Majoranas are then paired into complex fermions `c† = (γ₁ + i γ₂)/√2`, whose columns, together with their
 `C`-images, satisfy the CAR exactly.
 """
-function _zero_mode_fermions(Z::AbstractMatrix, _ph_conj, n_pairs::Int)
+function _zero_mode_fermions(Z::AbstractMatrix, _ph_conj, n_pairs::Int; tol=nothing)
     # Re-orthonormalize the zero-mode eigenvectors. For a degenerate eigenvalue cluster (all the
     # zero modes share E = 0), LAPACK's MRRR driver (syevr, used by `eigen` for real-symmetric
     # matrices) can return eigenvectors that span the correct subspace but are not mutually
@@ -899,7 +1565,7 @@ function _zero_mode_fermions(Z::AbstractMatrix, _ph_conj, n_pairs::Int)
     # so T(w) = A * conj(w) is an antiunitary involution (T² = I).
     A = Z' * _ph_conj(Z)
     A = (A + transpose(A)) / 2 # enforce the exact symmetry expected of a PH involution
-    @assert norm(A' * A - I, Inf) < residual_tol(A) "Particle-hole operator is not unitary on the zero-mode subspace."
+    @assert norm(A' * A - I, Inf) < (isnothing(tol) ? residual_tol(A) : tol) "Particle-hole operator is not unitary on the zero-mode subspace."
 
     dim = size(A, 1) # = 2 * n_pairs
     # Real representation of T on (Re w, Im w): writing w = wr + i·wi and A = Ar + i·Ai,
@@ -957,12 +1623,15 @@ function skew_canonical_form(P::AbstractMatrix)
 
     E, Φ = eigen(Hermitian(W); sortby = (x -> -real(x)))
     alphas = sqrt.(abs.(E))
-    tol = 1e-7
+    T = real(float(eltype(P)))
+    alpha_scale = max(one(T), maximum(alphas))
+    alpha_tol = 10sqrt(eps(T)) * alpha_scale
+    basis_tol = 10sqrt(eps(T))
 
     # sort indices by magnitude descending to make pairing stable
     idx_sorted = sortperm(alphas, rev = true)
-    nonzero_idx = [i for i in idx_sorted if !isapprox(alphas[i], 0.0; atol=tol)]
-    zero_idx = [i for i in idx_sorted if isapprox(alphas[i], 0.0; atol=tol)]
+    nonzero_idx = [i for i in idx_sorted if !isapprox(alphas[i], 0.0; atol=alpha_tol)]
+    zero_idx = [i for i in idx_sorted if isapprox(alphas[i], 0.0; atol=alpha_tol)]
 
     # ensure we have an even number of nonzero modes (otherwise pairing impossible)
     if isodd(length(nonzero_idx))
@@ -976,20 +1645,20 @@ function skew_canonical_form(P::AbstractMatrix)
     # build paired columns using Gram-Schmidt to safely handle degeneracies
     for i in nonzero_idx
         v = copy(Φ[:, i])
-        
+
         # Project out all previously established basis vectors in S
         for prev in 1:(pos-1)
             v -= S[:, prev] * (S[:, prev]' * v)
         end
-        
+
         # If the vector is fully spanned by previous pairs, skip it
-        if norm(v) < tol
+        if norm(v) < basis_tol
             continue
         end
-        
+
         v1 = v / norm(v)
         v2 = (P' * conj(v1)) / alphas[i]
-        
+
         S[:, pos]   = v1
         S[:, pos+1] = v2
         pos += 2
@@ -1001,7 +1670,7 @@ function skew_canonical_form(P::AbstractMatrix)
         for prev in 1:(pos-1)
             v -= S[:, prev] * (S[:, prev]' * v)
         end
-        if norm(v) < tol
+        if norm(v) < basis_tol
             continue
         end
         S[:, pos] = v / norm(v)
@@ -1020,7 +1689,7 @@ function skew_canonical_form(P::AbstractMatrix)
     X = perm_mat' * X * perm_mat
     S = S * perm_mat
 
-    X[abs.(X) .< tol] .= 0.0
+    X[abs.(X) .< alpha_tol] .= 0.0
 
     return S, X
 end
@@ -1110,14 +1779,22 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
     P = (P - transpose(P)) / 2 # enforce exact skew-symmetry
     @assert norm(Q*P - P*conj.(Q), Inf) < residual_tol(Q, P) "Q*P != P*conj.(Q)"
 
-    E_Q, B = eigen(Q; sortby = (x -> -real(x)))
+    # Julia's default Hermitian eigensolver uses LAPACK's MRRR driver. For
+    # highly degenerate Slater blocks it can return eigenvectors that span the
+    # correct eigenspace but lose orthogonality by much more than machine
+    # precision on some OpenBLAS builds. Bloch-Messiah requires a unitary B, so
+    # use the divide-and-conquer driver, which is robust for these clusters.
+    E_Q, B = LinearAlgebra.LAPACK.syevd!('V', 'U', Matrix(Q))
+    permutation = sortperm(E_Q; rev=true)
+    E_Q = E_Q[permutation]
+    B = B[:, permutation]
     @assert norm(B' * B - I, Inf) < residual_tol(B)
     @assert norm(B * B' - I, Inf) < residual_tol(B)
     # Q_bar = real(B'*Q*B)
     P_bar = B'*P*conj.(B)
     @assert norm(P_bar + transpose(P_bar), Inf) < residual_tol(P_bar) "P_bar should be skew-symmetric"
     P_bar = (P_bar - transpose(P_bar)) / 2 # enforce exact skew-symmetry
-    
+
     # Bring P_bar to canonical form by block-diagonalizing within degenerate subspaces of Q to avoid mixing
     # As P_bar is block diagonal
     #
@@ -1160,7 +1837,7 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
         end
         S[idx, idx] = S_sub # Place the canonical transformation in the correct block of S
     end
-    
+
     @assert norm(S' * S - I, Inf) < residual_tol(S)
     @assert norm(S * S' - I, Inf) < residual_tol(S)
 
@@ -1174,7 +1851,7 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
     @assert norm(D' * D - I, Inf) < residual_tol(D) "D should be unitary"
 
     @assert norm(D'*P*conj(D) - D'*conj(V)*transpose(U)*conj(D), Inf) < residual_tol(D, P)
-    
+
     F = MatrixFactorizations.rq(D' * U)
     R = Matrix(F.R)
     Q = Matrix(F.Q)
@@ -1230,8 +1907,8 @@ function bloch_messiah_decomposition(M::AbstractMatrix)
         end
         Phi = Diagonal(phase)
 
-        #= 
-            Absorb these phases into Ubar and C to keep the overall transformation invariant: 
+        #=
+            Absorb these phases into Ubar and C to keep the overall transformation invariant:
                 Ubar*C = (Ubar*Phi)*(Phi'*C)
                 Vbar*C = (Vbar*Phi)*(Phi'*C)
         =#
@@ -1308,22 +1985,17 @@ Return a truncated decomposition that removes zero columns from the `Vbar` block
 function truncated_bloch_messiah(Dmat,UVmat,Cmat)
     D,Ubar,Vbar,C = get_mats_from_bloch_messiah(Dmat, UVmat, Cmat)
 
-    # Discard numerically zero columns. The tolerance has to be relative to the largest
-    # column: for a Slater determinant (all pairing amplitudes zero, e.g. a π-flux hopping
-    # state) half the columns of Vbar vanish and their numerical noise floor sits at ~1e-10,
-    # i.e. right on top of an absolute 1e-10 cutoff. A null column then survives truncation,
-    # Q_mat comes out one dimension too large, and pfaffian() returns 0 for *every*
-    # configuration -> logψ = -Inf everywhere -> NaN importance weights.
-    # The absolute value is kept as a floor so that a Vbar that is entirely numerical noise
-    # is still truncated away completely, exactly as before.
+    # Scale the cutoff to the active canonical columns. Near a Slater state,
+    # leaked pairing can sit just above a fixed absolute threshold and make
+    # every Pfaffian amplitude vanish after truncation.
     colmax = [maximum(abs, col) for col in eachcol(Vbar)]
-    tol = max(1e-10, 1e-6 * maximum(colmax))
+    tol = max(1e-10, 1e-6 * maximum(colmax; init=0.0))
     zero_ind = findfirst(<(tol), colmax)
 
     if zero_ind === nothing
         return Dmat, UVmat, Cmat
     end
-    
+
     D_prime = D[:, 1:zero_ind-1]
     Vbar_prime = Vbar[1:zero_ind-1, 1:zero_ind-1]
     Ubar_prime = Ubar[1:zero_ind-1, 1:zero_ind-1]
@@ -1388,7 +2060,7 @@ function get_matrix_element(H_BdG::Hermitian, j_prime::Vector{Int}, j::Vector{In
             return 0.0 + 0.0im
         end
     else
-        # Operators strictly act on at most 2 sites. 
+        # Operators strictly act on at most 2 sites.
         # If configurations differ by 1, 3, 4, or more sites, the matrix element is 0.
         return 0.0 + 0.0im
     end

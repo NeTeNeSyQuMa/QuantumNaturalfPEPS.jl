@@ -109,36 +109,83 @@ row_major_site(i::Int, j::Int, Ly::Int) = (i - 1) * Ly + j
 col_major_site(i::Int, j::Int, Lx::Int) = i + (j - 1) * Lx
 
 # samples from ρ_r and updates pc
-function sample_ρr(ρ_r, S, r, c; trial_state::AbstractTrialState=IdentityState(size(ρ_r, 1)))
-    occ_dict = Dict{Int, Int}()
-    for i in 1:size(S,1), j in 1:size(S,2)
-        if i < r || (i == r && j < c)
-            # use linear indexing (assume square lattice here)
-            occ_dict[col_major_site(i, j, size(S,1))] = S[i,j] # -> use Column Major Order here to be consistent with the PEPS site ordering and the sampling order in get_sample()
-        end
-    end
-
+function sample_ρr(
+    ρ_r,
+    S,
+    r,
+    c;
+    trial_state::AbstractTrialState=IdentityState(size(ρ_r, 1)),
+    trial_sampling_cache=nothing,
+    lookahead_depth=0,
+)
     # prepare prob vector for PEPS
     k = size(ρ_r, 1) 
     T = real(eltype(ρ_r))
     p = Vector{T}(undef, k)
+    diagonal = [ρ_r[i, i] for i in 1:k]
+    diagonal_scale = maximum(abs, diagonal)
+    imaginary_tolerance =
+        100 * eps(T) * max(diagonal_scale, one(T)) + 1e-6 * diagonal_scale
     for i in 1:k
-        p[i] = abs(ρ_r[i, i])
-        @assert imag(ρ_r[i, i]) / (p[i] + 1e-10) < 1e-8 "ρ_r is not real $(ρ_r[i, i])"
+        z = diagonal[i]
+        abs(imag(z)) <= imaginary_tolerance || throw(ArgumentError(
+            "ρ_r diagonal is not real: z=$z, tolerance=$imaginary_tolerance",
+        ))
+        p[i] = abs(real(z))
     end
 
     # prepare prob vector for trial state
     current_site_key = col_major_site(r, c, size(S,1)) # use column major ordering here
     p_trial = Vector{T}(undef, k)
-    for i in 1:k
-        occ_dict[current_site_key] = i-1
-        p_trial[i] = get_prob(trial_state, occ_dict) # joint probability
+    if trial_sampling_cache isa ProjectedGaussianSchurCache
+        k == 2 || throw(DimensionMismatch(
+            "Gutzwiller-projected spin sampling requires local dimension 2, got $k",
+        ))
+        first(trial_sampling_cache.remaining_sites) == current_site_key ||
+            throw(ArgumentError(
+                "projected Gaussian Schur cache expects site " *
+                "$(first(trial_sampling_cache.remaining_sites)), got $current_site_key",
+            ))
+        p_trial .= projected_conditional_probabilities(trial_sampling_cache; lookahead_depth)
+    else
+        occ_dict = Dict{Int, Int}()
+        for i in 1:size(S, 1), j in 1:size(S, 2)
+            if i < r || (i == r && j < c)
+                occ_dict[col_major_site(i, j, size(S, 1))] = S[i, j]
+            end
+        end
+        for i in 1:k
+            occ_dict[current_site_key] = i-1
+            p_trial[i] = get_prob(trial_state, occ_dict) # joint probability
+        end
     end
     
     p_final = p .* p_trial
 
     i = sample_p(p_final, normalize=true)
+    if trial_sampling_cache isa ProjectedGaussianSchurCache
+        condition_projected_gaussian!(trial_sampling_cache, i - 1)
+    end
     return i-1, p_final[i]
+end
+
+_direct_sampling_cache(::AbstractTrialState, _) = nothing
+_direct_sampling_cache(state::ParameterizedGutzwillerProjectedState, order) =
+    ProjectedGaussianSchurCache(state; order)
+_direct_sampling_cache(state::FrozenTrialState, order) =
+    _direct_sampling_cache(state.state, order)
+
+_supports_projected_lookahead(::AbstractTrialState) = false
+_supports_projected_lookahead(::ParameterizedGutzwillerProjectedState) = true
+_supports_projected_lookahead(state::FrozenTrialState) = _supports_projected_lookahead(state.state)
+
+function _validate_direct_lookahead(trial_state, depth)
+    _validate_lookahead_depth(depth)
+    depth == 0 || _supports_projected_lookahead(trial_state) || throw(ArgumentError(
+        "lookahead_depth > 0 requires a ParameterizedGutzwillerProjectedState " *
+        "(optionally wrapped in FrozenTrialState)",
+    ))
+    return depth
 end
 
 function sample_p(probs::Vector{T}; normalize=true) where T<:Real
@@ -161,12 +208,18 @@ end
     The sample has column-major ordering: S = [s1 s3; s2 s4] 
     vec(S) = [s1, s2, s3, s4] where s1 is the occupation of site (1,1), s2 of site (2,1), s3 of site (1,2) and s4 of site (2,2)
 =#
-function get_sample(peps::AbstractPEPS; mode::Symbol=:full, alg="densitymatrix", timer=TimerOutput(), trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1,1])))
+function get_sample(peps::AbstractPEPS; mode::Symbol=:full, alg="densitymatrix", timer=TimerOutput(), trial_state::AbstractTrialState=IdentityState(dim(siteinds(peps)[1,1])), lookahead_depth=0)
+    _validate_direct_lookahead(trial_state, lookahead_depth)
     S = Array{Int64}(undef, size(peps)) # uses row major ordering
     
     env_top = Array{Environment}(undef, size(peps, 1)-1)
     sites = siteinds(peps)
     ρ_r = ITensor()
+    sampling_order = [
+        col_major_site(i, j, size(peps, 1))
+        for i in 1:size(peps, 1) for j in 1:size(peps, 2)
+    ]
+    trial_sampling_cache = _direct_sampling_cache(trial_state, sampling_order)
     
     logpc = 0
     # we loop through every row (This uses row-major ordering)
@@ -185,7 +238,15 @@ function get_sample(peps::AbstractPEPS; mode::Symbol=:full, alg="densitymatrix",
             ρ_r, sigma = get_reduced_ρ(ket[j], bra[j], peps, i, j, E, sigma)
             
             # sample from ρ_r
-            S[i, j], pc = sample_ρr(ρ_r, S, i, j; trial_state=trial_state)
+            S[i, j], pc = sample_ρr(
+                ρ_r,
+                S,
+                i,
+                j;
+                trial_state,
+                trial_sampling_cache,
+                lookahead_depth,
+            )
             logpc += log(pc)
             
             # after the sampling of the current site, it is fixed and its contraction with the aleady sampled sites is stored in sigma
@@ -204,8 +265,6 @@ function get_sample(peps::AbstractPEPS; mode::Symbol=:full, alg="densitymatrix",
             end
 
         elseif mode === :full
-             # Should we be recalculating the top environment here? Is it slower?
-             # The answer is yes, it is slower, but not by match. But it is also more accurate.
             if i == 1
                 peps_projected_1 = get_projected(peps, S, 1, :)
                 @timeit timer "env_top" env_top[1] = generate_env_row(peps_projected_1, peps.contract_dim; alg, cutoff=peps.contract_cutoff)

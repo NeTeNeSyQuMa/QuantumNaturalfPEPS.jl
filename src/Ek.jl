@@ -5,6 +5,7 @@ function sort_dict(Ek_terms; vertical=true)
     hor = Vector{Any}()
     vert = Vector{Any}()
     four = Vector{Any}()
+    extendedPatch = Vector{Any}()
     longerHor = Vector{Any}()
     other = Vector{Any}()
     # loop through every term
@@ -25,8 +26,12 @@ function sort_dict(Ek_terms; vertical=true)
                 insert(hor, flip_term)
             elseif maximum(xs)-minimum(xs) <= 1 && maximum(ys)-minimum(ys) == 0 && vertical
                 insert(vert, flip_term)
-            elseif maximum(xs)-minimum(xs) <= 1 && maximum(ys)-minimum(ys) <=1
+            elseif maximum(xs)-minimum(xs) <= 1 && maximum(ys)-minimum(ys) <= 1
                 insert(four, flip_term)
+            elseif 0 < maximum(xs)-minimum(xs) &&
+                   ((maximum(xs)-minimum(xs) <= 1 && maximum(ys)-minimum(ys) <= 2) ||
+                    (maximum(xs)-minimum(xs) <= 2 && maximum(ys)-minimum(ys) <= 1))
+                insert(extendedPatch, flip_term)
             elseif maximum(xs)-minimum(xs) == 0
                 insert(longerHor, flip_term)
             else
@@ -34,7 +39,7 @@ function sort_dict(Ek_terms; vertical=true)
             end
         end
     end
-    return hor, vert, four, longerHor, other
+    return hor, vert, four, extendedPatch, longerHor, other
 end
    
 # inserts the element x into the array arr at the desired position
@@ -43,13 +48,11 @@ function insert(arr, x)
         push!(arr,x)
         return
     end
-    x_min = x[1][1][1]
-    if length(x) == 2
-        xmin = minimum([x_min, x[2][1][1]])
-    end
+    x_min = minimum(term[1][1] for term in x)
     
     for i in 1:length(arr)
-        if arr[i][1][1][1] >= x_min
+        arr_min = minimum(term[1][1] for term in arr[i])
+        if arr_min >= x_min
             insert!(arr,i,x)
             return
         end
@@ -122,12 +125,73 @@ function get_4body_term(peps::AbstractPEPS, env_top::Vector{Environment}, env_do
     end
 
     c = (con_right*con_left)[]
-    if isreal(c) && c < 0
+    if isreal(c) && real(c) < 0
         c = complex(c)
     end
     logψ_flipped = log(c) + f
     
     return logψ_flipped
+end
+
+"""
+Contract the amplitude of a configuration modified inside a small rectangular
+patch. `strip_envs_l` and `strip_envs_r` contain the contraction of every
+column strictly to the left or right of the patch for the same contiguous row
+strip. This handles the triangular-lattice J2 displacements `(1, 2)` and
+`(2, 1)` using bounded `2x3` and `3x2` contractions.
+"""
+function get_patch_term(
+    peps::AbstractPEPS,
+    env_top::Vector{Environment},
+    env_down::Vector{Environment},
+    sample::Matrix{Int64},
+    flip_term,
+    strip_envs_r,
+    strip_envs_l,
+)
+    rows = map(term -> term[1][1], flip_term)
+    columns = map(term -> term[1][2], flip_term)
+    first_row, last_row = extrema(rows)
+    first_column, last_column = extrema(columns)
+    number_of_rows, number_of_columns = size(peps)
+
+    last_row - first_row <= 2 || throw(ArgumentError(
+        "local patch contractions support at most three contiguous rows",
+    ))
+    last_column - first_column <= 2 || throw(ArgumentError(
+        "local patch contractions support at most three contiguous columns",
+    ))
+
+    flipped_values = Dict(position => value for (position, value) in flip_term)
+    contraction = first_column == 1 ? 1 : strip_envs_l[first_column-1]
+    for column in first_column:last_column
+        if first_row > 1
+            contraction = contraction * env_top[first_row-1].env[column]
+        end
+        for row in first_row:last_row
+            value = get(flipped_values, (row, column), sample[row, column])
+            contraction = contraction * get_projected(peps, value, row, column)
+        end
+        if last_row < number_of_rows
+            contraction = contraction * env_down[number_of_rows-last_row].env[column]
+        end
+    end
+    if last_column < number_of_columns
+        contraction = contraction * strip_envs_r[last_column]
+    end
+
+    amplitude = contract(contraction)[]
+    if isreal(amplitude) && real(amplitude) < 0
+        amplitude = complex(amplitude)
+    end
+    normalization_shift = 0.0
+    if first_row > 1
+        normalization_shift += env_top[first_row-1].f
+    end
+    if last_row < number_of_rows
+        normalization_shift += env_down[number_of_rows-last_row].f
+    end
+    return log(amplitude) + normalization_shift
 end
 
 # same as get_4body_term but for horizontal Ek_terms
@@ -178,7 +242,7 @@ function get_term(peps::AbstractPEPS, env_top::Vector{Environment}, env_down::Ve
         flip = flip * h_envs_r[maxy]
     end
     c = contract(flip)[]
-    if isreal(c) && c < 0
+    if isreal(c) && real(c) < 0
         c = complex(c)
     end
     logψ_flipped = log(c) + f
@@ -237,7 +301,7 @@ function get_longerHor_term(peps::AbstractPEPS, env_top::Vector{Environment}, en
         flip = flip * h_envs_r[maxy]
     end
     c = contract(flip)[]
-    if isreal(c) && c < 0
+    if isreal(c) && real(c) < 0
         c = complex(c)
     end
     logψ_flipped = log(c) + f
@@ -262,7 +326,8 @@ function get_logψ_flipped(peps::AbstractPEPS, Ek_terms, env_top::Vector{Environ
     end
     
     # sorts the dictionary into the different categories
-    horizontal, vertical, fourBody, longerHor, other = sort_dict(Ek_terms, vertical=false)
+    horizontal, vertical, fourBody, extendedPatches, longerHor, other =
+        sort_dict(Ek_terms, vertical=false)
 
     # loop through every horizontal components
     @timeit timer "horizontal" for flip_term in horizontal 
@@ -302,6 +367,63 @@ function get_logψ_flipped(peps::AbstractPEPS, Ek_terms, env_top::Vector{Environ
         end
     end
 
+    if !isempty(extendedPatches)
+        three_row_anchor = 0
+        three_row_envs_r = nothing
+        three_row_envs_l = nothing
+        @timeit timer "extended_patch" for flip_term in extendedPatches
+            if !haskey(logψ_flipped, flip_term)
+                row_values = map(term -> term[1][1], flip_term)
+                upper_row, lower_row = extrema(row_values)
+                row_span = lower_row - upper_row + 1
+
+                local strip_envs_r, strip_envs_l
+                if row_span == 2
+                    if fourb_envs_r === nothing || fourb_envs_l === nothing
+                        @timeit timer "fourbody_envs" fourb_envs_r, fourb_envs_l =
+                            get_all_4b_envs(peps, env_top, env_down, sample)
+                    end
+                    strip_envs_r = @view fourb_envs_r[upper_row, :]
+                    strip_envs_l = @view fourb_envs_l[upper_row, :]
+                elseif row_span == 3
+                    if three_row_anchor != upper_row
+                        @timeit timer "three_row_envs" three_row_envs_r, three_row_envs_l =
+                            get_strip_envs(
+                                peps,
+                                env_top,
+                                env_down,
+                                sample,
+                                upper_row,
+                                3,
+                            )
+                        three_row_anchor = upper_row
+                    end
+                    strip_envs_r = three_row_envs_r
+                    strip_envs_l = three_row_envs_l
+                else
+                    error("internal error: unsupported extended patch row span $row_span")
+                end
+
+                logψ_flipped[flip_term] = get_patch_term(
+                    peps,
+                    env_top,
+                    env_down,
+                    sample,
+                    flip_term,
+                    strip_envs_r,
+                    strip_envs_l,
+                )
+
+                sample_flipped = copy(sample)
+                for ((row, column), value) in flip_term
+                    sample_flipped[row, column] = value
+                end
+                logψ_flipped[flip_term] +=
+                    log(get_amplitude(trial_state, collect(vec(sample_flipped))))
+            end
+        end
+    end
+
     if !isempty(longerHor)
         if h_envs_r === nothing || h_envs_l === nothing
             @timeit timer "horizontal_envs" h_envs_r, h_envs_l = get_all_horizontal_envs(peps, env_top, env_down, sample)
@@ -320,7 +442,12 @@ function get_logψ_flipped(peps::AbstractPEPS, Ek_terms, env_top::Vector{Environ
     end
 
     if !isempty(other)
-        @warn "Only nearest and next nearest neighbour interactions are efficiently supported. Note that if the opertor is in he computational basis, any interaction length is possible."
+        @warn(
+            "Some off-diagonal interactions do not fit inside the supported " *
+            "local PEPS patches (up to 2x3 or 3x2); using exact full-PEPS " *
+            "contractions. This includes periodic seam-crossing terms in an " *
+            "open rectangular PEPS representation.",
+        )
         for flip_term in other
             if !haskey(logψ_flipped, flip_term)
                 sample_flipped = copy(sample)
@@ -409,13 +536,13 @@ function get_Ek_Slater(GS::GaussianState, H_BdG_exact::Hermitian, S::Matrix{Int6
 
         coeff = zero(ComplexF64)
         if ja == 0 && jb == 1 # hopping from b to a such that we have nonzero overlap: <j'| t_ab c_a^† c_b |j> = sign * t_ab * S_j
-            coeff = SlaterConnections[(a, b)].t
-        elseif ja == 1 && jb == 0 # hopping from a to b such that we have nonzero overlap: <j'| t_ba c_b^† c_a |j> = sign * t_ba * S_j
             coeff = conj(SlaterConnections[(a, b)].t)
+        elseif ja == 1 && jb == 0 # hopping from a to b such that we have nonzero overlap: <j'| t_ba c_b^† c_a |j> = sign * t_ba * S_j
+            coeff = SlaterConnections[(a, b)].t
         elseif ja == 0 && jb == 0 # pairing of a and b such that we have nonzero overlap: <j'| Δ_ab c_a c_b |j> = sign * Δ_ab * S_j
-            coeff = SlaterConnections[(a, b)].Δ
-        else # pairing of a and b such that we have nonzero overlap: <j'| Δ_ab* c†_a c†_b |j> = sign * conj(Δ_ab) * S_j
             coeff = conj(SlaterConnections[(a, b)].Δ)
+        else # pairing of a and b such that we have nonzero overlap: <j'| Δ_ab* c†_a c†_b |j> = sign * conj(Δ_ab) * S_j
+            coeff = SlaterConnections[(a, b)].Δ
         end
 
         h_elem = fsign * coeff

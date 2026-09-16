@@ -104,7 +104,34 @@ function get_logψ(env_top::Vector{Environment}, env_down::Vector{Environment}; 
     return logψS + env_top[pos].f + env_down[end-pos+1].f
 end
 
+function logψ_exact_D1(peps::AbstractPEPS, sample)
+    peps.bond_dim == 1 || throw(ArgumentError(
+        "logψ_exact_D1 requires bond dimension one",
+    ))
+    size(sample) == size(peps) || throw(DimensionMismatch(
+        "sample size $(size(sample)) does not match PEPS size $(size(peps))",
+    ))
+
+    # Every virtual index has dimension one, so the projected PEPS contraction
+    # is just a product of one selected tensor entry per site. Accumulating the
+    # logarithms avoids both the high-order intermediates created by the generic
+    # exact contraction and underflow on large lattices.
+    log_amplitude = 0.0 + 0.0im
+    for column in 1:size(peps, 2), row in 1:size(peps, 1)
+        tensor = peps[row, column]
+        physical_index = siteind(peps, row, column)
+        coordinates = map(inds(tensor)) do index
+            index => (index == physical_index ? sample[row, column] + 1 : 1)
+        end
+        local_amplitude = tensor[coordinates...]
+        iszero(local_amplitude) && return ComplexF64(-Inf, 0.0)
+        log_amplitude += log(complex(local_amplitude))
+    end
+    return log_amplitude
+end
+
 function logψ_exact(peps, sample)
+    peps.bond_dim == 1 && return logψ_exact_D1(peps, sample)
     proj = get_projected(peps, sample)
     con = contract_peps_exact(proj)
     return log(Complex(con))
@@ -155,6 +182,88 @@ function contract_recursiv!(h_envs, a, b; c=ones(eltype(a[1]), length(a)), d=one
             h_envs[j] = h_envs[j-1]*a[j]*b[j]*c[j]*d[j]
         end
     end
+end
+
+function _contract_strip_column(layers, column)
+    contracted = layers[1][column]
+    for layer in @view layers[2:end]
+        contracted = contracted * layer[column]
+    end
+    return contracted
+end
+
+function _contract_strip_recursiv!(horizontal_envs, layers; right_to_left=true)
+    number_of_columns = length(layers[1])
+    all(length(layer) == number_of_columns for layer in layers) || throw(
+        DimensionMismatch("all strip layers must have the same number of columns"),
+    )
+    length(horizontal_envs) == number_of_columns - 1 || throw(
+        DimensionMismatch(
+            "a $number_of_columns-column strip requires " *
+            "$(number_of_columns - 1) horizontal environments",
+        ),
+    )
+
+    if right_to_left
+        horizontal_envs[end] = _contract_strip_column(layers, number_of_columns)
+        for column in number_of_columns-1:-1:2
+            horizontal_envs[column-1] =
+                horizontal_envs[column] * _contract_strip_column(layers, column)
+        end
+    else
+        horizontal_envs[1] = _contract_strip_column(layers, 1)
+        for column in 2:number_of_columns-1
+            horizontal_envs[column] =
+                horizontal_envs[column-1] * _contract_strip_column(layers, column)
+        end
+    end
+    return horizontal_envs
+end
+
+"""
+    get_strip_envs(peps, env_top, env_down, sample, first_row, row_count)
+
+Construct left and right contraction environments for a contiguous strip of
+projected PEPS rows. Rows outside the strip are represented by the precomputed
+top and bottom boundary MPS environments. The resulting environments permit
+local flipped-amplitude contractions spanning more than two rows without
+contracting the complete PEPS.
+"""
+function get_strip_envs(
+    peps::AbstractPEPS,
+    env_top::Vector{Environment},
+    env_down::Vector{Environment},
+    sample::Matrix{Int64},
+    first_row::Integer,
+    row_count::Integer,
+)
+    number_of_rows, number_of_columns = size(peps)
+    row_count > 0 || throw(ArgumentError("row_count must be positive"))
+    last_row = first_row + row_count - 1
+    1 <= first_row <= last_row <= number_of_rows || throw(BoundsError(
+        peps,
+        (first_row:last_row, :),
+    ))
+    number_of_columns >= 2 || throw(ArgumentError(
+        "strip environments require at least two PEPS columns",
+    ))
+
+    layers = Any[]
+    if first_row > 1
+        push!(layers, env_top[first_row-1].env)
+    end
+    for row in first_row:last_row
+        push!(layers, get_projected(peps, sample, row, :))
+    end
+    if last_row < number_of_rows
+        push!(layers, env_down[number_of_rows-last_row].env)
+    end
+
+    right = Vector{ITensor}(undef, number_of_columns - 1)
+    left = similar(right)
+    _contract_strip_recursiv!(right, layers)
+    _contract_strip_recursiv!(left, layers; right_to_left=false)
+    return right, left
 end
 
 function get_all_4b_envs(peps::AbstractPEPS, env_top::Vector{Environment}, env_down::Vector{Environment}, S::Matrix{Int64}, all_4b_envs_r::Array{ITensor}=Array{ITensor}(undef, size(peps, 1)-1, size(peps, 2)-1), all_4b_envs_l::Array{ITensor}=Array{ITensor}(undef, size(peps, 1)-1, size(peps, 2)-1))

@@ -33,10 +33,12 @@ Used via the `fix_trial_state=true` keyword of `generate_Oks_and_Eks`.
 struct FrozenTrialState{T<:AbstractTrialState} <: AbstractTrialState
     state::T
 end
-write!(f::FrozenTrialState, x) = nothing # frozen: parameters are never updated
-get_prob(f::FrozenTrialState, args...) = get_prob(f.state, args...)
-get_amplitude(f::FrozenTrialState, occ_string::Vector{Int}) = get_amplitude(f.state, occ_string)
-Parameters(f::FrozenTrialState) = []
-Base.eltype(f::FrozenTrialState) = eltype(f.state)
+
+write!(::FrozenTrialState, _) = nothing
+get_prob(state::FrozenTrialState, args...) = get_prob(state.state, args...)
+get_amplitude(state::FrozenTrialState, args...) = get_amplitude(state.state, args...)
+Parameters(::FrozenTrialState) = []
+Base.eltype(state::FrozenTrialState) = eltype(state.state)
 
 include("GaussianState.jl")
+include("GutzwillerProjectedState.jl")

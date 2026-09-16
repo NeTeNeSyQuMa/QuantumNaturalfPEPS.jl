@@ -20,7 +20,9 @@ function increase_bond_dim(o1::ITensor, o2::ITensor, new_bond_dim::Int; value=0,
     if value == 0 && svalue == 0
         t = NDTensors.random_unitary(ElT, dim(l), dim(ln))
         U = ITensor(t, l, ln)
-        return o1 * U, o2 * U
+        # Use conjugate isometries on the two sides of the bond so that
+        # contracting the enlarged bond inserts U * U† = I. 
+        return o1 * U, o2 * dag(U)
     end
     if value == 0
         value = 1.
