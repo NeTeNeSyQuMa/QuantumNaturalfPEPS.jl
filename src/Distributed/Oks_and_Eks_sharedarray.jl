@@ -64,7 +64,7 @@ function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; Oks=nothing
         Oks_ = @view Oks[:, i1:i2]
         task = Distributed.remotecall(
             () -> Oks_and_Eks_threaded(peps, ham_op, k;
-                                        importance_weights=false, logpcs_instead_of_weights=true, seed=seed + w,
+                                        importance_weights=false, seed=seed + w,
                                         nr_threads=n_threads, Oks=Oks_, return_Oks=false, kwargs...),
             w)
         push!(out, task)
@@ -84,7 +84,7 @@ function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; Oks=nothing
         Eks[i1:i2]           = out_dict[:Eks]
         logψs[i1:i2]         = out_dict[:logψs]
         samples[i1:i2]       = out_dict[:samples]
-        logpcs[i1:i2]        = out_dict[:weights]
+        logpcs[i1:i2]        = out_dict[:logpcs]
         contract_dims[i1:i2] = out_dict[:contract_dims]
         # No need to copy Oks – it is updated via the SharedArray.
     end
@@ -97,5 +97,5 @@ function Oks_and_Eks_multiproc_sharedarrays(peps, ham_op, sample_nr; Oks=nothing
     end
     @everywhere GC.gc() # Force garbage collection of the shared arrays on the remote workers.
     return Dict(:Oks => transpose(Oks), :Eks => Eks, :logψs => logψs,
-                :samples => samples, :weights => weights, :contract_dims => contract_dims)
+                :samples => samples, :logpcs => logpcs, :weights => weights, :contract_dims => contract_dims)
 end

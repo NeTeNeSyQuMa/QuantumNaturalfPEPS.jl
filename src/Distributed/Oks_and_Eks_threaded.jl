@@ -27,7 +27,7 @@ function generate_Oks_and_Eks_threaded(peps::AbstractPEPS, ham_op::TensorOperato
     return Oks_and_Eks_
 end
 
-function Oks_and_Eks_threaded(peps, ham_op, sample_nr; Oks=nothing, importance_weights=true, logpcs_instead_of_weights=false,
+function Oks_and_Eks_threaded(peps, ham_op, sample_nr; Oks=nothing, importance_weights=true,
                               timer=TimerOutput(), nr_threads=Threads.nthreads(), seed=nothing,
                               return_Oks=true,
                               kwargs...)
@@ -88,14 +88,10 @@ function Oks_and_Eks_threaded(peps, ham_op, sample_nr; Oks=nothing, importance_w
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        if logpcs_instead_of_weights
-            weights = logpcs
-        else
-            weights = ones(length(logpcs))
-        end
+        weights = ones(length(logpcs))
     end
     
-    data = Dict{Symbol, Any}(:Eks => Eks, :logψs => logψs, :samples => samples, :weights => weights, :contract_dims => contract_dims)
+    data = Dict{Symbol, Any}(:Eks => Eks, :logψs => logψs, :samples => samples, :logpcs => logpcs, :weights => weights, :contract_dims => contract_dims)
 
     if return_Oks
         data[:Oks] = transpose(Oks)
