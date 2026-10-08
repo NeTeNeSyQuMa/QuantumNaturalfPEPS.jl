@@ -140,7 +140,7 @@ function Eks_threaded(peps, ham_op, sample_nr; importance_weights=true, seed=not
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        weights = logpcs
+        weights = ones(length(logpcs))
     end
 
     return Dict(
@@ -148,6 +148,7 @@ function Eks_threaded(peps, ham_op, sample_nr; importance_weights=true, seed=not
         :logψs => logψs,
         :samples => samples,
         :weights => weights,
+        :logpcs => logpcs,
         :max_bond => max_bonds
     )
 end
@@ -221,7 +222,7 @@ function Eks_multiproc(peps, ham_op, sample_nr; importance_weights=true,
         Eks[i1:i2]       = out_dict[:Eks]
         logψs[i1:i2]     = out_dict[:logψs]
         samples[i1:i2]   = out_dict[:samples]
-        logpcs[i1:i2]    = out_dict[:weights]
+        logpcs[i1:i2]    = out_dict[:logpcs]
         max_bonds[i1:i2] = out_dict[:max_bond]
     end
 
@@ -229,7 +230,7 @@ function Eks_multiproc(peps, ham_op, sample_nr; importance_weights=true,
     if importance_weights
         weights = compute_importance_weights(logψs, logpcs)
     else
-        weights = logpcs
+        weights = ones(length(logpcs))
     end
 
     return Dict(
@@ -237,6 +238,7 @@ function Eks_multiproc(peps, ham_op, sample_nr; importance_weights=true,
         :logψs => logψs,
         :samples => samples,
         :weights => weights,
+        :logpcs => logpcs,
         :max_bond => max_bonds
     )
 end
